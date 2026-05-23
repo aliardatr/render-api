@@ -10,7 +10,8 @@ import json
 # ==========================================
 # 1. VERİTABANI KURULUMU VE ŞEMALAR
 # ==========================================
-DATABASE_URL = "sqlite:///./haberler.db"
+db_path = "/tmp/haberler.db" if os.getenv("RENDER") else "./haberler.db"
+DATABASE_URL = f"sqlite:///{db_path}"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
