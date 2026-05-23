@@ -12,9 +12,13 @@ import json
 # ==========================================
 # 1. VERİTABANI KURULUMU VE ŞEMALAR
 # ==========================================
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Render ortamı için güvenli veritabanı yolu eklendi
+db_path = "/tmp/haberler.db" if os.getenv("RENDER") else "./haberler.db"
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
 
-engine = create_engine(DATABASE_URL)
+connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -112,25 +116,25 @@ def kategorileri_getir(db: Session = Depends(get_db)):
 
 
 @app.get("/haberler/son-dakika")
-def son_dakika_haberleri(db: Session = Depends(get_db)):
-    haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
+def son_dakika_haberleri(skip: int = Query(0, ge=0), limit: int = Query(3, ge=1), db: Session = Depends(get_db)):
+    haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
     return {"haberler": haberler}
 
 
 @app.get("/haberler/filtrele")
-def coklu_kategori_getir(kategoriler: str = Query(""), db: Session = Depends(get_db)):
-    tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
-
+def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0), limit: int = Query(3, ge=1), db: Session = Depends(get_db)):
     if not kategoriler:
+        tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
         return {"haberler": tum_haberler}
 
     istenen_kategoriler_lower = [k.strip().lower() for k in kategoriler.split(",")]
+    tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
 
     filtrelenmis_haberler = [
         h for h in tum_haberler
         if any(kat.lower() in istenen_kategoriler_lower for kat in h.categories)
     ]
-    return {"haberler": filtrelenmis_haberler}
+    return {"haberler": filtrelenmis_haberler[skip : skip + limit]}
 
 
 @app.post("/haberler/{haber_id}/tikla")
@@ -164,7 +168,7 @@ def habere_tikla(haber_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/haberler/{kategori_adi}")
-def kategoriye_gore_haber_getir(kategori_adi: str, db: Session = Depends(get_db)):
+def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), limit: int = Query(3, ge=1), db: Session = Depends(get_db)):
     tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
     kategori_adi_lower = kategori_adi.lower()
 
@@ -172,7 +176,7 @@ def kategoriye_gore_haber_getir(kategori_adi: str, db: Session = Depends(get_db)
         h for h in tum_haberler
         if any(kat.lower() == kategori_adi_lower for kat in h.categories)
     ]
-    return {"haberler": filtrelenmis_haberler}
+    return {"haberler": filtrelenmis_haberler[skip : skip + limit]}
 
 
 # ==========================================
@@ -406,9 +410,6 @@ def admin_ana_sayfa(sort: str = "yeniden-eskiye", db: Session = Depends(get_db))
     return html_content
 
 
-# ==========================================
-# KATEGORİ YÖNETİM SAYFALARI
-# ==========================================
 @app.get("/admin/kategoriler", response_class=HTMLResponse)
 def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
     kategoriler = db.query(KategoriDB).all()
