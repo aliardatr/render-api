@@ -12,7 +12,7 @@ import json
 # ==========================================
 # 1. VERİTABANI KURULUMU VE ŞEMALAR
 # ==========================================
-# Render ortamı için güvenli veritabanı yolu eklendi
+# Render ortamında salt okunur hatası almamak için güvenli veritabanı yolu
 db_path = "/tmp/haberler.db" if os.getenv("RENDER") else "./haberler.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
 
@@ -101,7 +101,7 @@ app = FastAPI(title="haberPortaliAPI", version="2.4.0", lifespan=lifespan)
 
 
 # ==========================================
-# 3. ANDROID RETROFIT İLETİŞİM KAPILARI
+# 3. ANDROID RETROFIT İLETİŞİM KAPILARI (GERÇEK SAYFALAMA)
 # ==========================================
 @app.get("/")
 def ana_sayfa():
@@ -117,6 +117,7 @@ def kategorileri_getir(db: Session = Depends(get_db)):
 
 @app.get("/haberler/son-dakika")
 def son_dakika_haberleri(skip: int = Query(0, ge=0), limit: int = Query(3, ge=1), db: Session = Depends(get_db)):
+    # 🚀 Veritabanından sadece limit kadar veriyi, skip kadar atlayarak çeker (Gerçek Sayfalama)
     haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
     return {"haberler": haberler}
 
@@ -134,6 +135,7 @@ def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0
         h for h in tum_haberler
         if any(kat.lower() in istenen_kategoriler_lower for kat in h.categories)
     ]
+    # 🚀 Filtrelenen listenin sadece istenen 3'lük dilimini belleğe alıp gönderir
     return {"haberler": filtrelenmis_haberler[skip : skip + limit]}
 
 
@@ -176,6 +178,7 @@ def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), l
         h for h in tum_haberler
         if any(kat.lower() == kategori_adi_lower for kat in h.categories)
     ]
+    # 🚀 Kategori listesinin sadece istenen 3'lük dilimini yollar
     return {"haberler": filtrelenmis_haberler[skip : skip + limit]}
 
 
@@ -234,7 +237,6 @@ ADMIN_CSS = """
 </style>
 """
 
-# HTML ENJEKSİYONU: GÜNCELLENDİ - Tüm mobil akıllı metin biçimlendirme ve dynamic enjeksiyon motoru etiketlerinin kılavuzu
 FORMAT_GUIDE_HTML = """
 <div class="format-guide-card">
     <div class="format-guide-title">📝 Mobil Akıllı Metin & Enjeksiyon Format Kılavuzu</div>
@@ -267,7 +269,6 @@ FORMAT_GUIDE_HTML = """
 </div>
 """
 
-# Kategori doğruluğunu canlı kontrol eden JS kodu
 VALIDATION_SCRIPT = """
 <script>
     const validCategories = DATABASE_CATEGORIES_PLACEHOLDER; 
