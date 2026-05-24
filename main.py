@@ -1,10 +1,9 @@
 import os
-from sqlalchemy import create_engine
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Form, Depends, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import create_engine, Column, Integer, String, Text, JSON, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Text, JSON, Boolean, or_
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import date, datetime, timedelta
 import json
@@ -113,30 +112,45 @@ def kategorileri_getir(db: Session = Depends(get_db)):
     kategori_isimleri = [k.isim for k in kategoriler]
     return {"kategoriler": kategori_isimleri}
 
+# YENİ: Akıllı İçerik (Önerilen) için Tekil Haber Çekme
+@app.get("/haberler/detay/{haber_id}")
+def haber_detayi_getir(haber_id: int, db: Session = Depends(get_db)):
+    haber = db.query(HaberDB).filter(HaberDB.id == haber_id).first()
+    if haber:
+        return haber
+    return {"hata": "Haber bulunamadı"}
 
 @app.get("/haberler/son-dakika")
 def son_dakika_haberleri(skip: int = Query(0, ge=0), limit: int = Query(6, ge=1), db: Session = Depends(get_db)):
-    tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
-    # Vitrin sadece ilk yüklemede (skip=0) yollanır (10 adet).
-    vitrin = sorted(tum_haberler, key=lambda x: x.dailyViewCount, reverse=True)[:10] if skip == 0 else []
-    return {"vitrin": vitrin, "haberler": tum_haberler[skip : skip + limit]}
+    # RAM Dostu Sayfalama: Sadece limit kadar veriyi çeker
+    haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
+    
+    # Vitrin sadece ilk istekte (skip=0) veritabanından direkt en iyi 10 tanesi bulunarak yollanır
+    vitrin = []
+    if skip == 0:
+        vitrin = db.query(HaberDB).order_by(HaberDB.dailyViewCount.desc()).limit(10).all()
+        
+    return {"vitrin": vitrin, "haberler": haberler}
 
 
 @app.get("/haberler/filtrele")
 def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0), limit: int = Query(6, ge=1), db: Session = Depends(get_db)):
-    tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
-
     if not kategoriler:
-        vitrin = sorted(tum_haberler, key=lambda x: x.dailyViewCount, reverse=True)[:10] if skip == 0 else []
-        return {"vitrin": vitrin, "haberler": tum_haberler[skip : skip + limit]}
+        haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
+        vitrin = db.query(HaberDB).order_by(HaberDB.dailyViewCount.desc()).limit(10).all() if skip == 0 else []
+        return {"vitrin": vitrin, "haberler": haberler}
 
-    istenen_kategoriler_lower = [k.strip().lower() for k in kategoriler.split(",")]
-    filtrelenmis_haberler = [
-        h for h in tum_haberler
-        if any(kat.lower() in istenen_kategoriler_lower for kat in h.categories)
-    ]
-    vitrin = sorted(filtrelenmis_haberler, key=lambda x: x.dailyViewCount, reverse=True)[:10] if skip == 0 else []
-    return {"vitrin": vitrin, "haberler": filtrelenmis_haberler[skip : skip + limit]}
+    istenen_kategoriler = [k.strip() for k in kategoriler.split(",")]
+    # SQLite'da RAM tıkamadan JSON içinde arama optimizasyonu
+    conditions = [HaberDB.categories.ilike(f'%"{kat}"%') for kat in istenen_kategoriler]
+    
+    haberler = db.query(HaberDB).filter(or_(*conditions)).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
+    
+    vitrin = []
+    if skip == 0:
+        vitrin = db.query(HaberDB).filter(or_(*conditions)).order_by(HaberDB.dailyViewCount.desc()).limit(10).all()
+        
+    return {"vitrin": vitrin, "haberler": haberler}
 
 
 @app.post("/haberler/{haber_id}/tikla")
@@ -171,15 +185,18 @@ def habere_tikla(haber_id: int, db: Session = Depends(get_db)):
 
 @app.get("/haberler/{kategori_adi}")
 def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), limit: int = Query(6, ge=1), db: Session = Depends(get_db)):
-    tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
-    kategori_adi_lower = kategori_adi.lower()
-
-    filtrelenmis_haberler = [
-        h for h in tum_haberler
-        if any(kat.lower() == kategori_adi_lower for kat in h.categories)
-    ]
-    vitrin = sorted(filtrelenmis_haberler, key=lambda x: x.dailyViewCount, reverse=True)[:10] if skip == 0 else []
-    return {"vitrin": vitrin, "haberler": filtrelenmis_haberler[skip : skip + limit]}
+    if kategori_adi.lower() == "tümü":
+        haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
+        vitrin = db.query(HaberDB).order_by(HaberDB.dailyViewCount.desc()).limit(10).all() if skip == 0 else []
+        return {"vitrin": vitrin, "haberler": haberler}
+        
+    haberler = db.query(HaberDB).filter(HaberDB.categories.ilike(f'%"{kategori_adi}"%')).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
+    
+    vitrin = []
+    if skip == 0:
+        vitrin = db.query(HaberDB).filter(HaberDB.categories.ilike(f'%"{kategori_adi}"%')).order_by(HaberDB.dailyViewCount.desc()).limit(10).all()
+        
+    return {"vitrin": vitrin, "haberler": haberler}
 
 
 # ==========================================
@@ -333,10 +350,8 @@ VALIDATION_SCRIPT = """
 </script>
 """
 
-
 @app.get("/admin", response_class=HTMLResponse)
 def admin_ana_sayfa(sort: str = "yeniden-eskiye", db: Session = Depends(get_db)):
-    """Ana Dashboard: Filtreleme Seçenekli Haber Listesi"""
     haberler = db.query(HaberDB).all()
 
     if sort == "yeniden-eskiye":
@@ -410,7 +425,6 @@ def admin_ana_sayfa(sort: str = "yeniden-eskiye", db: Session = Depends(get_db))
     """
     return html_content
 
-
 @app.get("/admin/kategoriler", response_class=HTMLResponse)
 def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
     kategoriler = db.query(KategoriDB).all()
@@ -461,7 +475,6 @@ def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
     """
     return html_content
 
-
 @app.get("/admin/kategoriler/{kategori_adi}", response_class=HTMLResponse)
 def admin_kategori_haberleri_sayfasi(kategori_adi: str, db: Session = Depends(get_db)):
     tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
@@ -511,7 +524,6 @@ def admin_kategori_haberleri_sayfasi(kategori_adi: str, db: Session = Depends(ge
     """
     return html_content
 
-
 @app.post("/admin/kategori-ekle")
 def admin_kategori_ekle(isim: str = Form(...), db: Session = Depends(get_db)):
     temiz_isim = isim.strip()
@@ -525,7 +537,6 @@ def admin_kategori_ekle(isim: str = Form(...), db: Session = Depends(get_db)):
         db.commit()
 
     return RedirectResponse(url="/admin/kategoriler", status_code=303)
-
 
 @app.post("/admin/kategori-sil/{kat_id}")
 def admin_kategori_sil(kat_id: int, db: Session = Depends(get_db)):
@@ -602,7 +613,6 @@ def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
     script_content = VALIDATION_SCRIPT.replace("DATABASE_CATEGORIES_PLACEHOLDER", json.dumps(kayitli_kategoriler))
     return html_content + script_content
 
-
 @app.post("/admin/haber-ekle-islem")
 def haber_ekle_islem(
         title: str = Form(...), feedSummary: str = Form(...), pushSummary: str = Form(...),
@@ -632,7 +642,6 @@ def haber_ekle_islem(
     db.commit()
 
     return RedirectResponse(url="/admin", status_code=303)
-
 
 @app.get("/admin/haber-duzenle-secim", response_class=HTMLResponse)
 def admin_duzenle_secim():
@@ -671,7 +680,6 @@ def admin_duzenle_secim():
     </html>
     """
     return html_content
-
 
 @app.get("/admin/{haber_id}", response_class=HTMLResponse)
 def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
@@ -761,7 +769,6 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
     script_content = VALIDATION_SCRIPT.replace("DATABASE_CATEGORIES_PLACEHOLDER", json.dumps(kayitli_kategoriler))
     return html_content + script_content
 
-
 @app.post("/admin/guncelle/{haber_id}")
 def haber_guncelle(
         haber_id: str, title: str = Form(...), feedSummary: str = Form(...), pushSummary: str = Form(...),
@@ -798,7 +805,6 @@ def haber_guncelle(
         db.commit()
 
     return RedirectResponse(url="/admin", status_code=303)
-
 
 @app.post("/admin/sil/{haber_id}")
 def haber_sil(haber_id: str, db: Session = Depends(get_db)):
