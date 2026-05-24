@@ -1011,16 +1011,42 @@ def haber_ekle_islem(
     db.commit()
     db.refresh(yeni_haber)
     if bildirim_gonder == "evet" and pushSummary.strip():
+        # 1. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        yeni_bildirim = BildirimDB(
+            baslik=title,
+            icerik=pushSummary.strip() if pushSummary and pushSummary.strip() else "Detaylar için tıklayın.",
+            image_url=headerImage.strip() if headerImage and headerImage.strip() else None,
+            hedef_kategori=bildirim_hedef_kategori,
+            haber_id=yeni_haber.id,
+            tarih=now_str,
+            basarili_sayisi=0,
+            basarisiz_sayisi=0,
+            tiklama_sayisi=0
+        )
+        db.add(yeni_bildirim)
+        db.commit()
+        db.refresh(yeni_bildirim)
+        # 2. Token (Hedef Cihaz) Listesini Al
         token_listesi = hedef_kitle_tokenlari(bildirim_hedef_kategori, db)
+        
+        # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
         if token_listesi:
-            toplu_bildirim_gonder(
+            basarili, basarisiz = toplu_bildirim_gonder(
                 baslik=title,
-                icerik=pushSummary,
+                icerik=yeni_bildirim.icerik,
                 cihaz_tokenlari=token_listesi,
                 haber_id=yeni_haber.id,
-                image_url=headerImage,
-                hedef_kategori=bildirim_hedef_kategori
+                image_url=yeni_bildirim.image_url,
+                hedef_kategori=bildirim_hedef_kategori,
+                bildirim_id=yeni_bildirim.id
             )
+            
+            yeni_bildirim.basarili_sayisi = basarili
+            yeni_bildirim.basarisiz_sayisi = basarisiz
+            db.commit()
+            
+        return RedirectResponse(url="/admin?tab=bildirimler", status_code=303)
     return RedirectResponse(url="/admin", status_code=303)
 @app.get("/admin/haber-duzenle-secim", response_class=HTMLResponse)
 def admin_duzenle_secim():
@@ -1172,16 +1198,42 @@ def haber_guncelle(
         haber.date = date.today().isoformat()
         db.commit()
         if bildirim_gonder == "evet" and pushSummary.strip():
+            # 1. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            yeni_bildirim = BildirimDB(
+                baslik=title,
+                icerik=pushSummary.strip() if pushSummary and pushSummary.strip() else "Detaylar için tıklayın.",
+                image_url=headerImage.strip() if headerImage and headerImage.strip() else None,
+                hedef_kategori=bildirim_hedef_kategori,
+                haber_id=haber.id,
+                tarih=now_str,
+                basarili_sayisi=0,
+                basarisiz_sayisi=0,
+                tiklama_sayisi=0
+            )
+            db.add(yeni_bildirim)
+            db.commit()
+            db.refresh(yeni_bildirim)
+            # 2. Token (Hedef Cihaz) Listesini Al
             token_listesi = hedef_kitle_tokenlari(bildirim_hedef_kategori, db)
+            
+            # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
             if token_listesi:
-                toplu_bildirim_gonder(
+                basarili, basarisiz = toplu_bildirim_gonder(
                     baslik=title,
-                    icerik=pushSummary,
+                    icerik=yeni_bildirim.icerik,
                     cihaz_tokenlari=token_listesi,
                     haber_id=haber.id,
-                    image_url=headerImage,
-                    hedef_kategori=bildirim_hedef_kategori
+                    image_url=yeni_bildirim.image_url,
+                    hedef_kategori=bildirim_hedef_kategori,
+                    bildirim_id=yeni_bildirim.id
                 )
+                
+                yeni_bildirim.basarili_sayisi = basarili
+                yeni_bildirim.basarisiz_sayisi = basarisiz
+                db.commit()
+                
+            return RedirectResponse(url="/admin?tab=bildirimler", status_code=303)
     return RedirectResponse(url="/admin", status_code=303)
 @app.post("/admin/sil/{haber_id}")
 def haber_sil(haber_id: str, db: Session = Depends(get_db)):
