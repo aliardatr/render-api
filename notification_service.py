@@ -38,20 +38,32 @@ def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber
             body=icerik,
             image=image_url if image_url else None
         )
-        message = messaging.MulticastMessage(
-            notification=notif_obj,
-            data={
-                "haber_id": str(haber_id),
-                "hedef_kategori": hedef_kategori,
-                "click_action": "FLUTTER_NOTIFICATION_CLICK"
-            },
-            tokens=cihaz_tokenlari
-        )
+        success_count = 0
+        failure_count = 0
+        # Google, Haziran 2024 itibarıyla eski toplu /batch endpoint'ini (Multicast API) tamamen kapattığı için
+        # artık modern HTTP v1 uyumlu bireysel send() metodunu döngüyle çağırıyoruz.
+        for token in cihaz_tokenlari:
+            if not token or not token.strip():
+                continue
+            try:
+                message = messaging.Message(
+                    notification=notif_obj,
+                    data={
+                        "haber_id": str(haber_id),
+                        "hedef_kategori": hedef_kategori,
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK"
+                    },
+                    token=token.strip()
+                )
+                messaging.send(message)
+                success_count += 1
+            except Exception as send_err:
+                print(f"❌ Token ({token[:15]}...) için bildirim gönderilemedi: {send_err}")
+                failure_count += 1
         
-        response = messaging.send_multicast(message)
-        print(f"📡 Bildirim sonucu: {response.success_count} başarılı, {response.failure_count} başarısız.")
+        print(f"📡 Bildirim sonucu: {success_count} başarılı, {failure_count} başarısız.")
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ Bildirim gönderme hatası: {e}")
+        print(f"❌ Bildirim gönderme genel hatası: {e}")
         raise e
