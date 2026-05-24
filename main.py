@@ -152,6 +152,16 @@ async def lifespan(app: FastAPI):
     initialize_firebase()
     db = SessionLocal()
     try:
+        # 1. EKSİK SÜTUN MİGRASYONU (fcm_token sütununu PostgreSQL/SQLite veritabanına dinamik ekler)
+        try:
+            from sqlalchemy import text
+            db.execute(text("ALTER TABLE kullanicilar ADD COLUMN fcm_token VARCHAR;"))
+            db.commit()
+            print("🚀 'fcm_token' sütunu 'kullanicilar' tablosuna başarıyla eklendi!")
+        except Exception as alter_err:
+            db.rollback()
+            # Sütun zaten varsa hata verebilir, bu normaldir.
+            print(f"ℹ️ fcm_token sütun kontrolü (zaten var olabilir): {alter_err}")
         if db.query(KategoriDB).count() == 0:
             varsayilanlar = [
                 "Teknoloji", "Bilim", "Gündem", "Finans", "Tarih", "Siyaset",
