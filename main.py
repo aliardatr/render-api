@@ -12,7 +12,6 @@ import json
 # ==========================================
 # 1. VERİTABANI KURULUMU VE ŞEMALAR
 # ==========================================
-# Render ortamında salt okunur hatası almamak için güvenli veritabanı yolu
 db_path = "/tmp/haberler.db" if os.getenv("RENDER") else "./haberler.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
 
@@ -116,27 +115,28 @@ def kategorileri_getir(db: Session = Depends(get_db)):
 
 
 @app.get("/haberler/son-dakika")
-def son_dakika_haberleri(skip: int = Query(0, ge=0), limit: int = Query(3, ge=1), db: Session = Depends(get_db)):
-    # 🚀 Veritabanından sadece limit kadar veriyi, skip kadar atlayarak çeker (Gerçek Sayfalama)
-    haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
-    return {"haberler": haberler}
+def son_dakika_haberleri(skip: int = Query(0, ge=0), limit: int = Query(6, ge=1), db: Session = Depends(get_db)):
+    tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
+    # Vitrin sadece ilk yüklemede (skip=0) yollanır (10 adet).
+    vitrin = sorted(tum_haberler, key=lambda x: x.dailyViewCount, reverse=True)[:10] if skip == 0 else []
+    return {"vitrin": vitrin, "haberler": tum_haberler[skip : skip + limit]}
 
 
 @app.get("/haberler/filtrele")
-def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0), limit: int = Query(3, ge=1), db: Session = Depends(get_db)):
-    if not kategoriler:
-        tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
-        return {"haberler": tum_haberler}
-
-    istenen_kategoriler_lower = [k.strip().lower() for k in kategoriler.split(",")]
+def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0), limit: int = Query(6, ge=1), db: Session = Depends(get_db)):
     tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
 
+    if not kategoriler:
+        vitrin = sorted(tum_haberler, key=lambda x: x.dailyViewCount, reverse=True)[:10] if skip == 0 else []
+        return {"vitrin": vitrin, "haberler": tum_haberler[skip : skip + limit]}
+
+    istenen_kategoriler_lower = [k.strip().lower() for k in kategoriler.split(",")]
     filtrelenmis_haberler = [
         h for h in tum_haberler
         if any(kat.lower() in istenen_kategoriler_lower for kat in h.categories)
     ]
-    # 🚀 Filtrelenen listenin sadece istenen 3'lük dilimini belleğe alıp gönderir
-    return {"haberler": filtrelenmis_haberler[skip : skip + limit]}
+    vitrin = sorted(filtrelenmis_haberler, key=lambda x: x.dailyViewCount, reverse=True)[:10] if skip == 0 else []
+    return {"vitrin": vitrin, "haberler": filtrelenmis_haberler[skip : skip + limit]}
 
 
 @app.post("/haberler/{haber_id}/tikla")
@@ -170,7 +170,7 @@ def habere_tikla(haber_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/haberler/{kategori_adi}")
-def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), limit: int = Query(3, ge=1), db: Session = Depends(get_db)):
+def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), limit: int = Query(6, ge=1), db: Session = Depends(get_db)):
     tum_haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).all()
     kategori_adi_lower = kategori_adi.lower()
 
@@ -178,8 +178,8 @@ def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), l
         h for h in tum_haberler
         if any(kat.lower() == kategori_adi_lower for kat in h.categories)
     ]
-    # 🚀 Kategori listesinin sadece istenen 3'lük dilimini yollar
-    return {"haberler": filtrelenmis_haberler[skip : skip + limit]}
+    vitrin = sorted(filtrelenmis_haberler, key=lambda x: x.dailyViewCount, reverse=True)[:10] if skip == 0 else []
+    return {"vitrin": vitrin, "haberler": filtrelenmis_haberler[skip : skip + limit]}
 
 
 # ==========================================
