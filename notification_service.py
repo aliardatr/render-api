@@ -43,28 +43,25 @@ def toplu_bildirim_gonder(
         if not cihaz_tokenlari:
             print("Kayıtlı cihaz token'ı bulunamadı.")
             return 0, 0
-            
-        # Notification nesnesine opsiyonel olarak image URL verilebilir
-        notif_obj = messaging.Notification(
-            title=baslik,
-            body=icerik,
-            image=kucuk_resim.strip() if kucuk_resim and kucuk_resim.strip() else (image_url if image_url else None)
-        )
         success_count = 0
         failure_count = 0
         # Google, Haziran 2024 itibarıyla eski toplu /batch endpoint'ini (Multicast API) tamamen kapattığı için
         # artık modern HTTP v1 uyumlu bireysel send() metodunu döngüyle çağırıyoruz.
+        # Background ve foreground'da özelleştirilmiş 2 resimli görsel bildirimlerin her zaman işlenebilmesi için
+        # FCM mesajlarını 'data-only' formatında yolluyoruz.
         for token in cihaz_tokenlari:
             if not token or not token.strip():
                 continue
             try:
                 message = messaging.Message(
-                    notification=notif_obj,
                     data={
+                        "baslik": baslik,
+                        "icerik": icerik,
                         "haber_id": str(haber_id),
                         "hedef_kategori": hedef_kategori,
                         "bildirim_id": str(bildirim_id),
                         "click_action": "FLUTTER_NOTIFICATION_CLICK",
+                        "image_url": image_url.strip() if image_url and image_url.strip() else "",
                         "kucuk_resim": kucuk_resim.strip() if kucuk_resim and kucuk_resim.strip() else "",
                         "buyuk_resim": buyuk_resim.strip() if buyuk_resim and buyuk_resim.strip() else "",
                         "genis_metin": genis_metin.strip() if genis_metin and genis_metin.strip() else "",
