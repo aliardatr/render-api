@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 import json
 from pydantic import BaseModel
 from typing import Optional, List, Any
+from notification_service import initialize_firebase, toplu_bildirim_gonder
 # ==========================================
 # 1. VERİTABANI KURULUMU VE ŞEMALAR
 # ==========================================
@@ -54,6 +55,7 @@ class KullaniciDB(Base):
     cihaz_id = Column(String, unique=True, index=True)
     kaydedilen_haberler = Column(JSON, default=[])
     ilgi_alanlari = Column(JSON, default=[])
+    fcm_token = Column(String, nullable=True)
 Base.metadata.create_all(bind=engine)
 # ==========================================
 # 2. PYDANTIC ŞEMALARI (Android Parse Hatalarını Engeller)
@@ -79,6 +81,11 @@ class HaberlerResponse(BaseModel):
     haberler: List[HaberSchema]
 class KategoriResponse(BaseModel):
     kategoriler: List[str]
+class TokenRequest(BaseModel):
+    cihaz_id: str
+    fcm_token: str
+class IlgiAlanlariRequest(BaseModel):
+    ilgi_alanlari: List[str]
 def get_db():
     db = SessionLocal()
     try:
@@ -107,11 +114,25 @@ def kategori_arama_filtresi(kategori_adi: str):
     cond4 = cast(HaberDB.categories, String).ilike(f'%{upper_kat}%')
     
     return or_(cond1, cond2, cond3, cond4)
+def hedef_kitle_tokenlari(hedef_kategori: str, db: Session):
+    kullanicilar = db.query(KullaniciDB).filter(KullaniciDB.fcm_token.isnot(None)).all()
+    if hedef_kategori == "Tümü":
+        return [k.fcm_token for k in kullanicilar]
+    
+    hedef_kucuk = turkce_kucult(hedef_kategori)
+    token_list = []
+    for k in kullanicilar:
+        if k.ilgi_alanlari:
+            alanlar_kucuk = [turkce_kucult(a) for a in k.ilgi_alanlari]
+            if hedef_kucuk in alanlar_kucuk:
+                token_list.append(k.fcm_token)
+    return token_list
 # ==========================================
 # 3. FASTAPI YENİ NESİL YAŞAM DÖNGÜSÜ (LIFESPAN)
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    initialize_firebase()
     db = SessionLocal()
     try:
         if db.query(KategoriDB).count() == 0:
@@ -204,6 +225,39 @@ def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), l
         vitrin = db.query(HaberDB).filter(filtre).order_by(HaberDB.dailyViewCount.desc()).limit(10).all()
         
     return {"vitrin": vitrin, "haberler": haberler}
+@app.post("/kullanicilar/token-kaydet")
+def token_kaydet(request: TokenRequest, db: Session = Depends(get_db)):
+    kullanici = db.query(KullaniciDB).filter(KullaniciDB.cihaz_id == request.cihaz_id).first()
+    if kullanici:
+        kullanici.fcm_token = request.fcm_token
+    else:
+        yeni_kullanici = KullaniciDB(
+            cihaz_id=request.cihaz_id, 
+            fcm_token=request.fcm_token,
+            kaydedilen_haberler=[],
+            ilgi_alanlari=[]
+        )
+        db.add(yeni_kullanici)
+    db.commit()
+    return {"mesaj": "FCM Token başarıyla kaydedildi."}
+@app.post("/kullanicilar/{cihaz_id}/ilgi-alanlari-kaydet")
+def ilgi_alanlari_kaydet(cihaz_id: str, request: IlgiAlanlariRequest, db: Session = Depends(get_db)):
+    kullanici = db.query(KullaniciDB).filter(KullaniciDB.cihaz_id == cihaz_id).first()
+    if kullanici:
+        kullanici.ilgi_alanlari = request.ilgi_alanlari
+        db.commit()
+        return {"mesaj": "İlgi alanları başarıyla güncellendi."}
+    
+    # Kullanıcı yoksa oluşturup kaydedelim
+    yeni_kullanici = KullaniciDB(
+        cihaz_id=cihaz_id,
+        fcm_token=None,
+        kaydedilen_haberler=[],
+        ilgi_alanlari=request.ilgi_alanlari
+    )
+    db.add(yeni_kullanici)
+    db.commit()
+    return {"mesaj": "Kullanıcı oluşturuldu ve ilgi alanları eklendi."}
 # ==========================================
 # 5. GELİŞMİŞ WEB ADMİN PANELİ (PREMIUM UI DESIGN)
 # ==========================================
@@ -390,6 +444,9 @@ def admin_ana_sayfa(sort: str = "yeniden-eskiye", db: Session = Depends(get_db))
                 <a href="/admin/haber-duzenle-secim" class="btn btn-blue">✏️ HABER DÜZENLE / SİL</a>
                 <a href="/admin/kategoriler" class="btn btn-gray" style="margin-top:0;">🏷️ KATEGORİ SİSTEMİ</a>
             </div>
+            <div class="row" style="margin-top: 12px;">
+                <a href="/admin/ozel-bildirim" class="btn btn-blue" style="background:#8B5CF6;">📢 ÖZEL BİLDİRİM GÖNDER</a>
+            </div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 45px; border-bottom: 2px solid #22252E; padding-bottom: 12px;">
                 <h3 style="margin: 0; color: #F1F5F9;">📰 Yayındaki İçerik Akışı</h3>
                 <select id="sortSelect" onchange="location.href='/admin?sort='+this.value" style="width: auto; margin: 0; padding: 8px 16px; background: #1E222B; color: #F8FAFC; border: 1px solid #2D323F; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
@@ -408,6 +465,76 @@ def admin_ana_sayfa(sort: str = "yeniden-eskiye", db: Session = Depends(get_db))
     </html>
     """
     return html_content
+@app.get("/admin/ozel-bildirim", response_class=HTMLResponse)
+def admin_ozel_bildirim_sayfasi(db: Session = Depends(get_db)):
+    kayitli_kategoriler = [k.isim for k in db.query(KategoriDB).all()]
+    options_html = '<option value="Tümü">Tümü (Herkese)</option>'
+    for k in kayitli_kategoriler:
+        options_html += f'<option value="{k}">{k}</option>'
+        
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="tr">
+    <head>
+        <meta charset="UTF-8">
+        <title>Özel Bildirim Merkezi</title>
+        {ADMIN_CSS}
+    </head>
+    <body>
+        <div class="container">
+            <h2>📢 Özel Push Bildirim Merkezi</h2>
+            <form action="/admin/ozel-bildirim-gonder" method="post">
+                <label>Bildirim Başlığı (Zorunlu):</label>
+                <input type="text" name="baslik" required placeholder="Flaş gelişme...">
+                
+                <label>Açıklama / İçerik:</label>
+                <input type="text" name="icerik" placeholder="Detaylı bilgi (opsiyonel)">
+                
+                <label>Görsel Linki (Sağdaki Küçük İkon):</label>
+                <input type="url" name="image_url" placeholder="https://... (opsiyonel)">
+                
+                <label>Bağlı Olduğu Haber ID:</label>
+                <input type="number" name="haber_id" placeholder="Tıklayınca habere gitsin istiyorsanız ID yazın (opsiyonel)">
+                
+                <label>Kime Gönderilsin? (Hedef Kitle):</label>
+                <select name="hedef_kategori">
+                    {options_html}
+                </select>
+                
+                <div class="row" style="margin-top: 25px;">
+                    <a href="/admin" class="btn btn-gray" style="line-height: normal; display: flex; align-items: center; justify-content: center;">İPTAL ET</a>
+                    <button type="submit" class="btn btn-blue" style="background:#8B5CF6;">📢 BİLDİRİMİ ATEŞLE</button>
+                </div>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+    return html_content
+@app.post("/admin/ozel-bildirim-gonder")
+def ozel_bildirim_gonder_islem(
+    baslik: str = Form(...), 
+    icerik: str = Form(""), 
+    image_url: str = Form(""), 
+    haber_id: str = Form(""), 
+    hedef_kategori: str = Form("Tümü"), 
+    db: Session = Depends(get_db)
+):
+    h_id = -1
+    if haber_id.strip().isdigit():
+        h_id = int(haber_id)
+        
+    token_listesi = hedef_kitle_tokenlari(hedef_kategori, db)
+    if token_listesi:
+        toplu_bildirim_gonder(
+            baslik=baslik,
+            icerik=icerik,
+            cihaz_tokenlari=token_listesi,
+            haber_id=h_id,
+            image_url=image_url if image_url.strip() else None,
+            hedef_kategori=hedef_kategori
+        )
+    return RedirectResponse(url="/admin", status_code=303)
 @app.get("/admin/kategoriler", response_class=HTMLResponse)
 def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
     kategoriler = db.query(KategoriDB).all()
@@ -517,6 +644,9 @@ def admin_kategori_sil(kat_id: int, db: Session = Depends(get_db)):
 @app.get("/admin/haber-ekleme", response_class=HTMLResponse)
 def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
     kayitli_kategoriler = [k.isim for k in db.query(KategoriDB).all()]
+    options_html = '<option value="Tümü">Tümü (Herkese)</option>'
+    for k in kayitli_kategoriler:
+        options_html += f'<option value="{k}">{k}</option>'
     html_content = f"""
     <!DOCTYPE html>
     <html lang="tr">
@@ -556,6 +686,17 @@ def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
                 {FORMAT_GUIDE_HTML}
                 <span class="hint">Not: Kaydedildiğinde haber ID numarası JSON içerisinde yerleşik olarak mobil uygulamaya paslanacaktır.</span>
                 <textarea name="content" rows="10" required placeholder="Haber metnini buraya detaylıca yazın..."></textarea>
+                <div style="background: #1E222B; padding: 15px; border-radius: 8px; margin-top: 15px; border: 1px dashed #64B5F6;">
+                    <label style="margin-top:0; color:#64B5F6;">📢 Bu haber için Bildirim Gönderilsin mi?</label>
+                    <div style="display:flex; align-items:center; margin-top:8px;">
+                        <input type="checkbox" name="bildirim_gonder" value="evet" style="width:20px; height:20px; margin:0 10px 0 0;">
+                        <span style="color:#E2E8F0; font-size:14px;">Evet, anında gönder (Uygulamayı uyandırır)</span>
+                    </div>
+                    <label style="margin-top:15px;">Hedef Kitle (Kime Gönderilsin?):</label>
+                    <select name="bildirim_hedef_kategori">
+                        {options_html}
+                    </select>
+                </div>
                 <div class="row" style="margin-top: 25px;">
                     <a href="/admin" class="btn btn-gray" style="line-height: normal; display: flex; align-items: center; justify-content: center;">İPTAL ET</a>
                     <button type="submit" class="btn btn-green">HABERİ YAYINA AL</button>
@@ -571,7 +712,9 @@ def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
 def haber_ekle_islem(
         title: str = Form(...), feedSummary: str = Form(...), pushSummary: str = Form(...),
         headerImage: str = Form(...), trustScore: int = Form(...), categories: str = Form(...),
-        source: str = Form(...), content: str = Form(...), db: Session = Depends(get_db)
+        source: str = Form(...), content: str = Form(...), 
+        bildirim_gonder: str = Form(None), bildirim_hedef_kategori: str = Form("Tümü"),
+        db: Session = Depends(get_db)
 ):
     kaynak_listesi = [source.strip()]
     kayitli_kategoriler = [k.isim for k in db.query(KategoriDB).all()]
@@ -591,6 +734,18 @@ def haber_ekle_islem(
     )
     db.add(yeni_haber)
     db.commit()
+    db.refresh(yeni_haber)
+    if bildirim_gonder == "evet" and pushSummary.strip():
+        token_listesi = hedef_kitle_tokenlari(bildirim_hedef_kategori, db)
+        if token_listesi:
+            toplu_bildirim_gonder(
+                baslik=title,
+                icerik=pushSummary,
+                cihaz_tokenlari=token_listesi,
+                haber_id=yeni_haber.id,
+                image_url=headerImage,
+                hedef_kategori=bildirim_hedef_kategori
+            )
     return RedirectResponse(url="/admin", status_code=303)
 @app.get("/admin/haber-duzenle-secim", response_class=HTMLResponse)
 def admin_duzenle_secim():
@@ -639,6 +794,9 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
     kat_str = ", ".join(haber.categories) if haber.categories else ""
     kaynak_str = ", ".join(haber.sources) if haber.sources else ""
     kayitli_kategoriler = [k.isim for k in db.query(KategoriDB).all()]
+    options_html = '<option value="Tümü">Tümü (Herkese)</option>'
+    for k in kayitli_kategoriler:
+        options_html += f'<option value="{k}">{k}</option>'
     html_content = f"""
     <!DOCTYPE html>
     <html lang="tr">
@@ -680,6 +838,17 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
                 <label>Haberin Tam İçeriği:</label>
                 {FORMAT_GUIDE_HTML}
                 <textarea name="content" rows="10" required>{temiz_icerik}</textarea>
+                <div style="background: #1E222B; padding: 15px; border-radius: 8px; margin-top: 15px; border: 1px dashed #64B5F6;">
+                    <label style="margin-top:0; color:#64B5F6;">📢 Güncelleme sonrası Bildirim Gönderilsin mi?</label>
+                    <div style="display:flex; align-items:center; margin-top:8px;">
+                        <input type="checkbox" name="bildirim_gonder" value="evet" style="width:20px; height:20px; margin:0 10px 0 0;">
+                        <span style="color:#E2E8F0; font-size:14px;">Evet, bildirimi ateşle</span>
+                    </div>
+                    <label style="margin-top:15px;">Hedef Kitle (Kime Gönderilsin?):</label>
+                    <select name="bildirim_hedef_kategori">
+                        {options_html}
+                    </select>
+                </div>
                 <div class="row" style="margin-top: 25px;">
                     <button type="submit" class="btn btn-blue">💾 DEĞİŞİKLİKLERİ VERİTABANINA KAYDET</button>
                 </div>
@@ -701,7 +870,9 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
 def haber_guncelle(
         haber_id: str, title: str = Form(...), feedSummary: str = Form(...), pushSummary: str = Form(...),
         headerImage: str = Form(...), trustScore: int = Form(...), categories: str = Form(...),
-        source: str = Form(...), content: str = Form(...), db: Session = Depends(get_db)
+        source: str = Form(...), content: str = Form(...), 
+        bildirim_gonder: str = Form(None), bildirim_hedef_kategori: str = Form("Tümü"),
+        db: Session = Depends(get_db)
 ):
     gercek_id = int(haber_id)
     haber = db.query(HaberDB).filter(HaberDB.id == gercek_id).first()
@@ -725,6 +896,17 @@ def haber_guncelle(
         haber.content = content.split('\n\n\n\n')[0]
         haber.date = date.today().isoformat()
         db.commit()
+        if bildirim_gonder == "evet" and pushSummary.strip():
+            token_listesi = hedef_kitle_tokenlari(bildirim_hedef_kategori, db)
+            if token_listesi:
+                toplu_bildirim_gonder(
+                    baslik=title,
+                    icerik=pushSummary,
+                    cihaz_tokenlari=token_listesi,
+                    haber_id=haber.id,
+                    image_url=headerImage,
+                    hedef_kategori=bildirim_hedef_kategori
+                )
     return RedirectResponse(url="/admin", status_code=303)
 @app.post("/admin/sil/{haber_id}")
 def haber_sil(haber_id: str, db: Session = Depends(get_db)):
