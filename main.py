@@ -15,7 +15,11 @@ from typing import Optional, List, Any
 db_path = "/tmp/haberler.db" if os.getenv("RENDER") else "./haberler.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+engine = create_engine(
+    DATABASE_URL, 
+    connect_args=connect_args,
+    json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False)
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 class HaberDB(Base):
@@ -81,6 +85,19 @@ def get_db():
         yield db
     finally:
         db.close()
+def kategori_arama_filtresi(kategori_adi: str):
+    """
+    SQLite'da JSON kolonunda Türkçe karakter (ü, ı, ş, ç vb.) ararken 
+    eski kayıtlardaki unicode (\u00fc vb.) sorunlarını çözer.
+    """
+    raw_kat = kategori_adi
+    encoded_kat = json.dumps(kategori_adi)[1:-1]
+    
+    cond1 = cast(HaberDB.categories, String).ilike(f'%"{raw_kat}"%')
+    if raw_kat != encoded_kat:
+        cond2 = cast(HaberDB.categories, String).ilike(f'%"{encoded_kat}"%')
+        return or_(cond1, cond2)
+    return cond1
 # ==========================================
 # 3. FASTAPI YENİ NESİL YAŞAM DÖNGÜSÜ (LIFESPAN)
 # ==========================================
@@ -129,8 +146,8 @@ def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0
         return {"vitrin": vitrin, "haberler": haberler}
     istenen_kategoriler = [k.strip() for k in kategoriler.split(",")]
     
-    # HATA 6 (ÇÖKME) DÜZELTİLDİ: JSON sütunu filtrelerken String'e cast edildi
-    conditions = [cast(HaberDB.categories, String).ilike(f'%"{kat}"%') for kat in istenen_kategoriler]
+    # HATA 6 (ÇÖKME) DÜZELTİLDİ: JSON sütunu filtrelerken Türkçe karakter desteği eklendi
+    conditions = [kategori_arama_filtresi(kat) for kat in istenen_kategoriler]
     
     haberler = db.query(HaberDB).filter(or_(*conditions)).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
     
@@ -169,12 +186,13 @@ def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), l
         vitrin = db.query(HaberDB).order_by(HaberDB.dailyViewCount.desc()).limit(10).all() if skip == 0 else []
         return {"vitrin": vitrin, "haberler": haberler}
         
-    # HATA 6 (ÇÖKME) DÜZELTİLDİ: JSON formatındaki sütun doğrudan ilike aranamaz, cast() edildi.
-    haberler = db.query(HaberDB).filter(cast(HaberDB.categories, String).ilike(f'%"{kategori_adi}"%')).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
+    # HATA 6 (ÇÖKME) DÜZELTİLDİ: JSON formatındaki sütun doğrudan ilike aranamaz, Türkçe destekli filtremiz kullanıldı.
+    filtre = kategori_arama_filtresi(kategori_adi)
+    haberler = db.query(HaberDB).filter(filtre).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
     
     vitrin = []
     if skip == 0:
-        vitrin = db.query(HaberDB).filter(cast(HaberDB.categories, String).ilike(f'%"{kategori_adi}"%')).order_by(HaberDB.dailyViewCount.desc()).limit(10).all()
+        vitrin = db.query(HaberDB).filter(filtre).order_by(HaberDB.dailyViewCount.desc()).limit(10).all()
         
     return {"vitrin": vitrin, "haberler": haberler}
 # ==========================================
@@ -429,9 +447,9 @@ def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
 def admin_kategori_haberleri_sayfasi(kategori_adi: str, db: Session = Depends(get_db)):
     # HATA DÜZELTME: Kategori sayfasında tüm verileri çekmek RAM israfıdır. 
     # ilike SQLite JSON kolonlarında patladığı için cast(HaberDB.categories, String) kullanılır.
-    kategori_adi_lower = kategori_adi.lower()
-    
-    filtrelenmis_haberler = db.query(HaberDB).filter(cast(HaberDB.categories, String).ilike(f'%"{kategori_adi}"%')).order_by(HaberDB.id.desc()).limit(100).all()
+    # SQLite JSON kolonlarında Türkçe karakter araması (ü, ı vb.) için filtre kullanıldı.
+    filtre = kategori_arama_filtresi(kategori_adi)
+    filtrelenmis_haberler = db.query(HaberDB).filter(filtre).order_by(HaberDB.id.desc()).limit(100).all()
     liste_html = ""
     for h in filtrelenmis_haberler:
         fmt_id = f"{h.id:010d}"
