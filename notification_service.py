@@ -22,7 +22,19 @@ def initialize_firebase():
     else:
         print("⚠️ Uyarı: FIREBASE_CREDENTIALS_JSON environment variable bulunamadı. Bildirim motoru pasif.")
 # Yeni haber eklendiğinde bunu çağıracağız
-def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber_id: int = -1, image_url: str = None, hedef_kategori: str = "Tümü", bildirim_id: int = -1):
+def toplu_bildirim_gonder(
+    baslik: str, 
+    icerik: str, 
+    cihaz_tokenlari: list, 
+    haber_id: int = -1, 
+    image_url: str = None, 
+    hedef_kategori: str = "Tümü", 
+    bildirim_id: int = -1,
+    kucuk_resim: str = None,
+    buyuk_resim: str = None,
+    genis_metin: str = None,
+    genisletme_tipi: str = "resim"
+):
     try:
         if not firebase_admin._apps:
             print("Firebase pasif olduğu için bildirim atlandı.")
@@ -36,7 +48,7 @@ def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber
         notif_obj = messaging.Notification(
             title=baslik,
             body=icerik,
-            image=image_url if image_url else None
+            image=kucuk_resim.strip() if kucuk_resim and kucuk_resim.strip() else (image_url if image_url else None)
         )
         success_count = 0
         failure_count = 0
@@ -52,7 +64,11 @@ def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber
                         "haber_id": str(haber_id),
                         "hedef_kategori": hedef_kategori,
                         "bildirim_id": str(bildirim_id),
-                        "click_action": "FLUTTER_NOTIFICATION_CLICK"
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK",
+                        "kucuk_resim": kucuk_resim.strip() if kucuk_resim and kucuk_resim.strip() else "",
+                        "buyuk_resim": buyuk_resim.strip() if buyuk_resim and buyuk_resim.strip() else "",
+                        "genis_metin": genis_metin.strip() if genis_metin and genis_metin.strip() else "",
+                        "genisletme_tipi": genisletme_tipi if genisletme_tipi else "resim"
                     },
                     token=token.strip()
                 )
