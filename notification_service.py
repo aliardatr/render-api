@@ -22,7 +22,7 @@ def initialize_firebase():
     else:
         print("⚠️ Uyarı: FIREBASE_CREDENTIALS_JSON environment variable bulunamadı. Bildirim motoru pasif.")
 # Yeni haber eklendiğinde bunu çağıracağız
-def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber_id: int = -1, image_url: str = None):
+def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber_id: int = -1, image_url: str = None, hedef_kategori: str = "Tümü"):
     if not firebase_admin._apps:
         print("Firebase pasif olduğu için bildirim atlandı.")
         return
@@ -41,6 +41,7 @@ def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber
         notification=notif_obj,
         data={
             "haber_id": str(haber_id),
+            "hedef_kategori": hedef_kategori,
             "click_action": "FLUTTER_NOTIFICATION_CLICK"
         },
         tokens=cihaz_tokenlari
