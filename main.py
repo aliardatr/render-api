@@ -172,8 +172,12 @@ async def lifespan(app: FastAPI):
             print("🚀 'fcm_token' sütunu 'kullanicilar' tablosuna başarıyla eklendi!")
         except Exception as alter_err:
             db.rollback()
-            # Sütun zaten varsa hata verebilir, bu normaldir.
-            print(f"ℹ️ fcm_token sütun kontrolü (zaten var olabilir): {alter_err}")
+            # Sütun zaten varsa hata vermesi normaldir. Logları kirletmemek ve Render'da kırmızı uyarı almamak için detayı gizliyoruz.
+            err_str = str(alter_err).lower()
+            if "already exists" in err_str or "duplicate column" in err_str:
+                print("ℹ️ fcm_token sütun kontrolü: Sütun zaten mevcut (Sistem hazır).")
+            else:
+                print(f"ℹ️ fcm_token sütun kontrolü uyarısı: {err_str[:150]}")
         if db.query(KategoriDB).count() == 0:
             varsayilanlar = [
                 "Teknoloji", "Bilim", "Gündem", "Finans", "Tarih", "Siyaset",
