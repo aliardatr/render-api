@@ -514,26 +514,35 @@ def admin_ozel_bildirim_sayfasi(db: Session = Depends(get_db)):
 @app.post("/admin/ozel-bildirim-gonder")
 def ozel_bildirim_gonder_islem(
     baslik: str = Form(...), 
-    icerik: str = Form(""), 
-    image_url: str = Form(""), 
-    haber_id: str = Form(""), 
+    icerik: Optional[str] = Form(None), 
+    image_url: Optional[str] = Form(None), 
+    haber_id: Optional[str] = Form(None), 
     hedef_kategori: str = Form("Tümü"), 
     db: Session = Depends(get_db)
 ):
+    # 1. Haber ID güvenli dönüşüm (Boşsa veya harf girilmişse -1 kalır)
     h_id = -1
-    if haber_id.strip().isdigit():
-        h_id = int(haber_id)
+    if haber_id and str(haber_id).strip().isdigit():
+        h_id = int(str(haber_id).strip())
         
+    # 2. Token (Hedef Cihaz) Listesini Al
     token_listesi = hedef_kitle_tokenlari(hedef_kategori, db)
+    
+    # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
     if token_listesi:
+        # İhtiyat: İçerik boş bırakılırsa Firebase hata vermesin diye varsayılan atama
+        safe_icerik = icerik.strip() if icerik and icerik.strip() else "Detaylar için tıklayın."
+        safe_image = image_url.strip() if image_url and image_url.strip() else None
+        
         toplu_bildirim_gonder(
             baslik=baslik,
-            icerik=icerik,
+            icerik=safe_icerik,
             cihaz_tokenlari=token_listesi,
             haber_id=h_id,
-            image_url=image_url if image_url.strip() else None,
+            image_url=safe_image,
             hedef_kategori=hedef_kategori
         )
+        
     return RedirectResponse(url="/admin", status_code=303)
 @app.get("/admin/kategoriler", response_class=HTMLResponse)
 def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
