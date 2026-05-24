@@ -3,3 +3,4 @@ uvicorn
 sqlalchemy
 python-multipart
 psycopg2-binary
+firebase-admin==6.5.0
