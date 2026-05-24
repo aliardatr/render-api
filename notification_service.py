@@ -23,32 +23,35 @@ def initialize_firebase():
         print("⚠️ Uyarı: FIREBASE_CREDENTIALS_JSON environment variable bulunamadı. Bildirim motoru pasif.")
 # Yeni haber eklendiğinde bunu çağıracağız
 def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber_id: int = -1, image_url: str = None, hedef_kategori: str = "Tümü"):
-    if not firebase_admin._apps:
-        print("Firebase pasif olduğu için bildirim atlandı.")
-        return
-        
-    if not cihaz_tokenlari:
-        print("Kayıtlı cihaz token'ı bulunamadı.")
-        return
-        
-    # Notification nesnesine opsiyonel olarak image URL verilebilir
-    notif_obj = messaging.Notification(
-        title=baslik,
-        body=icerik,
-        image=image_url if image_url else None
-    )
-    message = messaging.MulticastMessage(
-        notification=notif_obj,
-        data={
-            "haber_id": str(haber_id),
-            "hedef_kategori": hedef_kategori,
-            "click_action": "FLUTTER_NOTIFICATION_CLICK"
-        },
-        tokens=cihaz_tokenlari
-    )
-    
     try:
+        if not firebase_admin._apps:
+            print("Firebase pasif olduğu için bildirim atlandı.")
+            return
+            
+        if not cihaz_tokenlari:
+            print("Kayıtlı cihaz token'ı bulunamadı.")
+            return
+            
+        # Notification nesnesine opsiyonel olarak image URL verilebilir
+        notif_obj = messaging.Notification(
+            title=baslik,
+            body=icerik,
+            image=image_url if image_url else None
+        )
+        message = messaging.MulticastMessage(
+            notification=notif_obj,
+            data={
+                "haber_id": str(haber_id),
+                "hedef_kategori": hedef_kategori,
+                "click_action": "FLUTTER_NOTIFICATION_CLICK"
+            },
+            tokens=cihaz_tokenlari
+        )
+        
         response = messaging.send_multicast(message)
         print(f"📡 Bildirim sonucu: {response.success_count} başarılı, {response.failure_count} başarısız.")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"❌ Bildirim gönderme hatası: {e}")
+        raise e
