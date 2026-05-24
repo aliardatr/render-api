@@ -56,6 +56,18 @@ class KullaniciDB(Base):
     kaydedilen_haberler = Column(JSON, default=[])
     ilgi_alanlari = Column(JSON, default=[])
     fcm_token = Column(String, nullable=True)
+class BildirimDB(Base):
+    __tablename__ = "bildirimler"
+    id = Column(Integer, primary_key=True, index=True)
+    baslik = Column(String, nullable=False)
+    icerik = Column(String, nullable=False)
+    image_url = Column(String, nullable=True)
+    hedef_kategori = Column(String, nullable=False)
+    haber_id = Column(Integer, default=-1)
+    tarih = Column(String, nullable=False)
+    basarili_sayisi = Column(Integer, default=0)
+    basarisiz_sayisi = Column(Integer, default=0)
+    tiklama_sayisi = Column(Integer, default=0)
 Base.metadata.create_all(bind=engine)
 # ==========================================
 # 2. PYDANTIC ŞEMALARI (Android Parse Hatalarını Engeller)
@@ -286,6 +298,24 @@ def ilgi_alanlari_kaydet(cihaz_id: str, request: IlgiAlanlariRequest, db: Sessio
     db.add(yeni_kullanici)
     db.commit()
     return {"mesaj": "Kullanıcı oluşturuldu ve ilgi alanları eklendi."}
+@app.post("/bildirimler/{bildirim_id}/tikla")
+def bildirim_tikla(bildirim_id: int, db: Session = Depends(get_db)):
+    bildirim = db.query(BildirimDB).filter(BildirimDB.id == bildirim_id).first()
+    if bildirim:
+        bildirim.tiklama_sayisi += 1
+        db.commit()
+        return {"mesaj": "Bildirim tıklaması artırıldı", "tiklama_sayisi": bildirim.tiklama_sayisi}
+    raise HTTPException(status_code=404, detail="Bildirim bulunamadı")
+@app.get("/api/bildirimler/{bildirim_id}/istatistik")
+def api_bildirim_istatistik(bildirim_id: int, db: Session = Depends(get_db)):
+    b = db.query(BildirimDB).filter(BildirimDB.id == bildirim_id).first()
+    if b:
+        return {
+            "basarili": b.basarili_sayisi,
+            "basarisiz": b.basarisiz_sayisi,
+            "tiklama": b.tiklama_sayisi
+        }
+    raise HTTPException(status_code=404, detail="Bildirim bulunamadı")
 # ==========================================
 # 5. GELİŞMİŞ WEB ADMİN PANELİ (PREMIUM UI DESIGN)
 # ==========================================
@@ -330,6 +360,20 @@ ADMIN_CSS = """
     .format-guide-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 11px; }
     .format-guide-item { background: #15181F; padding: 8px 12px; border-radius: 6px; border: 1px solid #2D323F; display: flex; flex-direction: column; justify-content: flex-start; }
     .format-code { font-family: monospace; color: #10B981; font-weight: 700; background: rgba(16, 185, 129, 0.1); padding: 2px 6px; border-radius: 4px; display: block; margin-bottom: 4px; width: fit-content; }
+    /* Premium Notification Dashboard Accordion Styles */
+    .notif-card { background: #1E222B; border: 1px solid #2D323F; border-radius: 12px; margin-bottom: 12px; overflow: hidden; transition: all 0.2s ease; }
+    .notif-card:hover { border-color: #1976D2; background: #252A36; }
+    .notif-header { padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+    .notif-title-group { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+    .notif-title { font-size: 15px; font-weight: 600; color: #F1F5F9; }
+    .notif-meta { font-size: 12px; color: #64748B; }
+    .notif-badge { background: rgba(139, 92, 246, 0.15); color: #A78BFA; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; border: 1px solid rgba(139, 92, 246, 0.4); margin-left: 12px; width: fit-content; }
+    .notif-content-area { padding: 0 20px 20px 20px; border-top: 1px solid #2D323F; display: none; background: #15181F; }
+    .notif-body-text { color: #94A3B8; font-size: 14px; margin-top: 15px; margin-bottom: 15px; line-height: 1.5; }
+    .notif-stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 10px; }
+    .notif-stat-box { background: #1E222B; border: 1px solid #2D323F; padding: 12px; border-radius: 8px; text-align: center; }
+    .notif-stat-val { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+    .notif-stat-lbl { font-size: 11px; color: #64748B; font-weight: 600; text-transform: uppercase; }
 </style>
 """
 FORMAT_GUIDE_HTML = """
@@ -418,44 +462,143 @@ VALIDATION_SCRIPT = """
 </script>
 """
 @app.get("/admin", response_class=HTMLResponse)
-def admin_ana_sayfa(sort: str = "yeniden-eskiye", db: Session = Depends(get_db)):
-    # HATA 5 (RAM Optimizasyonu) DÜZELTİLDİ: 
-    # Milyonlarca haber olursa all() server'ı çökertir, sıralamalar SQL tarafına taşındı.
-    if sort == "yeniden-eskiye":
-        haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).limit(200).all()
-    elif sort == "eskiden-yeniye":
-        haberler = db.query(HaberDB).order_by(HaberDB.id.asc()).limit(200).all()
-    elif sort == "en-cok-tiklanan":
-        haberler = db.query(HaberDB).order_by(HaberDB.viewCount.desc()).limit(200).all()
-    elif sort == "24-saatte-en-cok-tiklanan":
-        haberler = db.query(HaberDB).order_by(HaberDB.dailyViewCount.desc()).limit(200).all()
-    elif sort == "en-cok-kullanilan":
-        # Kategorilere göre yoğunluk (şimdilik RAM'de)
-        tum_haberler = db.query(HaberDB).limit(200).all()
-        kategori_frekanslari = {}
-        for h in tum_haberler:
-            if h.categories:
-                for kat in h.categories:
-                    kategori_frekanslari[kat.lower()] = kategori_frekanslari.get(kat.lower(), 0) + 1
-        # HATA 1 (ÇÖKME) DÜZELTİLDİ: cat yerine kat yazıldı
-        def haber_populerlik_skoru(h):
-            if not h.categories: return 0
-            return max(kategori_frekanslari.get(kat.lower(), 0) for kat in h.categories)
-        haberler = sorted(tum_haberler, key=haber_populerlik_skoru, reverse=True)
-    else:
-        haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).limit(200).all()
+def admin_ana_sayfa(
+    tab: str = "haberler", 
+    sort: str = "yeniden-eskiye", 
+    kategori: str = "Tümü", 
+    db: Session = Depends(get_db)
+):
+    tab = tab.lower()
+    
+    # 1. KATEGORİ SEÇENEKLERİNİ HAZIRLA (Filtreleme için)
+    kayitli_kategoriler = [k.isim for k in db.query(KategoriDB).all()]
+    
+    kat_options_html = f'<option value="Tümü" {"selected" if kategori == "Tümü" else ""}>Kategori: Tümü</option>'
+    for k in kayitli_kategoriler:
+        kat_options_html += f'<option value="{k}" {"selected" if kategori == k else ""}>Kategori: {k}</option>'
+        
     liste_html = ""
-    for h in haberler:
-        fmt_id = f"{h.id:010d}"
-        liste_html += f"""
-        <a href="/admin/{fmt_id}" class="news-item">
-            <img src="{h.headerImage}" alt="Görsel">
-            <div class="news-item-content">
-                <div class="news-title">{h.title}</div>
-                <div class="news-id">ID: {fmt_id} &nbsp;|&nbsp; Toplam Okunma: {h.viewCount} &nbsp;|&nbsp; Son 24s: <span style="color:#10B981; font-weight:bold;">{h.dailyViewCount}</span></div>
+    
+    if tab == "bildirimler":
+        # 2. BİLDİRİMLER SEKME YÜKLEMESİ
+        query = db.query(BildirimDB)
+        if kategori != "Tümü":
+            query = query.filter(BildirimDB.hedef_kategori == kategori)
+            
+        if sort == "yeniden-eskiye":
+            query = query.order_by(BildirimDB.id.desc())
+        elif sort == "eskiden-yeniye":
+            query = query.order_by(BildirimDB.id.asc())
+        elif sort == "en-cok-tiklanan":
+            query = query.order_by(BildirimDB.tiklama_sayisi.desc())
+        elif sort == "en-basarili":
+            query = query.order_by(BildirimDB.basarili_sayisi.desc())
+        else:
+            query = query.order_by(BildirimDB.id.desc())
+            
+        bildirimler = query.limit(200).all()
+        
+        for b in bildirimler:
+            liste_html += f"""
+            <div class="notif-card">
+                <div class="notif-header" onclick="toggleNotif({b.id})">
+                    <div class="notif-title-group">
+                        <div class="notif-title">{b.baslik}</div>
+                        <div class="notif-meta">📍 Hedef: <span style="color:#64B5F6; font-weight:bold;">{b.hedef_kategori}</span> &nbsp;|&nbsp; 📅 {b.tarih}</div>
+                    </div>
+                    <div style="display:flex; align-items:center;">
+                        <span class="notif-badge">ID: #{b.id}</span>
+                    </div>
+                </div>
+                <div class="notif-content-area" id="notif-content-{b.id}">
+                    <div class="notif-body-text">{b.icerik}</div>
+                    {"<div style='margin-bottom:10px; font-size:12px; color:#10B981;'>🔗 Haber ID: " + str(b.haber_id) + "</div>" if b.haber_id and b.haber_id != -1 else ""}
+                    {"<div style='margin-bottom:10px; font-size:12px; color:#64B5F6;'>🖼️ Görsel Linki: <a href='" + b.image_url + "' target='_blank' style='color:#64B5F6; word-break:break-all;'>" + b.image_url + "</a></div>" if b.image_url else ""}
+                    
+                    <div class="notif-stats-grid">
+                        <div class="notif-stat-box" style="border-color: rgba(16, 185, 129, 0.3);">
+                            <div class="notif-stat-val" id="stat-success-{b.id}" style="color: #10B981;">{b.basarili_sayisi}</div>
+                            <div class="notif-stat-lbl">BAŞARILI (CİHAZ)</div>
+                        </div>
+                        <div class="notif-stat-box" style="border-color: rgba(239, 68, 68, 0.3);">
+                            <div class="notif-stat-val" id="stat-fail-{b.id}" style="color: #EF4444;">{b.basarisiz_sayisi}</div>
+                            <div class="notif-stat-lbl">BAŞARISIZ (GEÇERSİZ)</div>
+                        </div>
+                        <div class="notif-stat-box" style="border-color: rgba(25, 118, 210, 0.3);">
+                            <div class="notif-stat-val" id="stat-click-{b.id}" style="color: #64B5F6;">{b.tiklama_sayisi}</div>
+                            <div class="notif-stat-lbl">TOPLAM TIKLANMA</div>
+                        </div>
+                    </div>
+                    
+                    <button onclick="refreshStats({b.id})" class="btn btn-blue btn-small" style="margin-top: 15px; background: #334155; width: auto;">🔄 CANLI VERİLERİ GÜNCELLE</button>
+                </div>
             </div>
-        </a>
+            """
+    else:
+        # 3. HABERLER SEKME YÜKLEMESİ (ESKİ YAPI - KORUNDU)
+        if sort == "yeniden-eskiye":
+            haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).limit(200).all()
+        elif sort == "eskiden-yeniye":
+            haberler = db.query(HaberDB).order_by(HaberDB.id.asc()).limit(200).all()
+        elif sort == "en-cok-tiklanan":
+            haberler = db.query(HaberDB).order_by(HaberDB.viewCount.desc()).limit(200).all()
+        elif sort == "24-saatte-en-cok-tiklanan":
+            haberler = db.query(HaberDB).order_by(HaberDB.dailyViewCount.desc()).limit(200).all()
+        elif sort == "en-cok-kullanilan":
+            tum_haberler = db.query(HaberDB).limit(200).all()
+            kategori_frekanslari = {}
+            for h in tum_haberler:
+                if h.categories:
+                    for kat in h.categories:
+                        kategori_frekanslari[kat.lower()] = kategori_frekanslari.get(kat.lower(), 0) + 1
+            def haber_populerlik_skoru(h):
+                if not h.categories: return 0
+                return max(kategori_frekanslari.get(kat.lower(), 0) for kat in h.categories)
+            haberler = sorted(tum_haberler, key=haber_populerlik_skoru, reverse=True)
+        else:
+            haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).limit(200).all()
+        for h in haberler:
+            fmt_id = f"{h.id:010d}"
+            liste_html += f"""
+            <a href="/admin/{fmt_id}" class="news-item">
+                <img src="{h.headerImage}" alt="Görsel">
+                <div class="news-item-content">
+                    <div class="news-title">{h.title}</div>
+                    <div class="news-id">ID: {fmt_id} &nbsp;|&nbsp; Toplam Okunma: {h.viewCount} &nbsp;|&nbsp; Son 24s: <span style="color:#10B981; font-weight:bold;">{h.dailyViewCount}</span></div>
+                </div>
+            </a>
+            """
+    # Pre-resolve f-string variables to avoid syntax/nesting issues
+    tab_title = "📰 Yayındaki İçerik Akışı" if tab == "haberler" else "📢 Gönderilen Bildirim Günlüğü"
+    
+    tab_haberler_border = '#1976D2' if tab == 'haberler' else 'transparent'
+    tab_haberler_color = '#F1F5F9' if tab == 'haberler' else '#64748B'
+    
+    tab_bildirimler_border = '#1976D2' if tab == 'bildirimler' else 'transparent'
+    tab_bildirimler_color = '#F1F5F9' if tab == 'bildirimler' else '#64748B'
+    
+    kat_select_html = f"<select id='katSelect' onchange='updateFilters()' style='width: auto; margin: 0; padding: 8px 16px; background: #1E222B; color: #F8FAFC; border: 1px solid #2D323F; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;'>{kat_options_html}</select>" if tab == "bildirimler" else ""
+    
+    sort_onchange = "updateFilters()" if tab == "bildirimler" else "location.href='/admin?sort='+this.value"
+    
+    if tab == "bildirimler":
+        sort_options_html = f"""
+        <option value='yeniden-eskiye' {'selected' if sort == 'yeniden-eskiye' else ''}>Yeniden Eskiye</option>
+        <option value='eskiden-yeniye' {'selected' if sort == 'eskiden-yeniye' else ''}>Eskiden Yeniye</option>
+        <option value='en-cok-tiklanan' {'selected' if sort == 'en-cok-tiklanan' else ''}>En Çok Tıklananlar</option>
+        <option value='en-basarili' {'selected' if sort == 'en-basarili' else ''}>En Başarılı Gönderimler</option>
         """
+    else:
+        sort_options_html = f"""
+        <option value="yeniden-eskiye" {"selected" if sort == "yeniden-eskiye" else ""}>Sıralama: Yeniden Eskiye</option>
+        <option value="eskiden-yeniye" {"selected" if sort == "eskiden-yeniye" else ""}>Sıralama: Eskiden Yeniye</option>
+        <option value="en-cok-kullanilan" {"selected" if sort == "en-cok-kullanilan" else ""}>Kategori Yoğunluğuna Göre</option>
+        <option value="en-cok-tiklanan" {"selected" if sort == "en-cok-tiklanan" else ""}>En Çok Okunanlar (Global)</option>
+        <option value="24-saatte-en-cok-tiklanan" {"selected" if sort == "24-saatte-en-cok-tiklanan" else ""}>En Çok Okunanlar (Son 24s)</option>
+        """
+        
+    empty_list_msg = f"<p style='color: #64748B; text-align:center; padding: 20px;'>Henüz {'haber' if tab == 'haberler' else 'bildirim'} kaydı bulunmuyor.</p>"
+    news_list_content = liste_html if liste_html else empty_list_msg
     html_content = f"""
     <!DOCTYPE html>
     <html lang="tr">
@@ -475,20 +618,72 @@ def admin_ana_sayfa(sort: str = "yeniden-eskiye", db: Session = Depends(get_db))
             <div class="row" style="margin-top: 12px;">
                 <a href="/admin/ozel-bildirim" class="btn btn-blue" style="background:#8B5CF6;">📢 ÖZEL BİLDİRİM GÖNDER</a>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 45px; border-bottom: 2px solid #22252E; padding-bottom: 12px;">
-                <h3 style="margin: 0; color: #F1F5F9;">📰 Yayındaki İçerik Akışı</h3>
-                <select id="sortSelect" onchange="location.href='/admin?sort='+this.value" style="width: auto; margin: 0; padding: 8px 16px; background: #1E222B; color: #F8FAFC; border: 1px solid #2D323F; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
-                    <option value="yeniden-eskiye" {"selected" if sort == "yeniden-eskiye" else ""}>Sıralama: Yeniden Eskiye</option>
-                    <option value="eskiden-yeniye" {"selected" if sort == "eskiden-yeniye" else ""}>Sıralama: Eskiden Yeniye</option>
-                    <option value="en-cok-kullanilan" {"selected" if sort == "en-cok-kullanilan" else ""}>Kategori Yoğunluğuna Göre</option>
-                    <option value="en-cok-tiklanan" {"selected" if sort == "en-cok-tiklanan" else ""}>En Çok Okunanlar (Global)</option>
-                    <option value="24-saatte-en-cok-tiklanan" {"selected" if sort == "24-saatte-en-cok-tiklanan" else ""}>En Çok Okunanlar (Son 24s)</option>
-                </select>
+            <!-- Sleek Tab Switcher -->
+            <div style="display: flex; gap: 10px; margin-top: 35px; border-bottom: 2px solid #22252E; padding-bottom: 0;">
+                <a href="/admin?tab=haberler" style="padding: 12px 24px; text-decoration: none; font-weight: bold; border-bottom: 3px solid {tab_haberler_border}; color: {tab_haberler_color}; font-size: 15px; transition: all 0.2s;">📰 Haber Akışı</a>
+                <a href="/admin?tab=bildirimler" style="padding: 12px 24px; text-decoration: none; font-weight: bold; border-bottom: 3px solid {tab_bildirimler_border}; color: {tab_bildirimler_color}; font-size: 15px; transition: all 0.2s;">📢 Gönderilen Bildirimler</a>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 25px; border-bottom: 2px solid #22252E; padding-bottom: 12px;">
+                <h3 style="margin: 0; color: #F1F5F9;">
+                    {tab_title}
+                </h3>
+                
+                <div style="display: flex; gap: 10px;">
+                    {kat_select_html}
+                    
+                    <select id="sortSelect" onchange="{sort_onchange}" style="width: auto; margin: 0; padding: 8px 16px; background: #1E222B; color: #F8FAFC; border: 1px solid #2D323F; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+                        {sort_options_html}
+                    </select>
+                </div>
             </div>
             <div class="news-list">
-                {liste_html if liste_html else "<p style='color: #64748B; text-align:center; padding: 20px;'>Henüz sisteme haber kaydı girilmemiş.</p>"}
+                {news_list_content}
             </div>
         </div>
+        <script>
+            function updateFilters() {{
+                const kat = document.getElementById('katSelect') ? document.getElementById('katSelect').value : 'Tümü';
+                const sort = document.getElementById('sortSelect').value;
+                location.href = `/admin?tab=bildirimler&sort=${{sort}}&kategori=${{kat}}`;
+            }}
+            function toggleNotif(id) {{
+                const area = document.getElementById('notif-content-' + id);
+                const isExpanded = area.style.display === 'block';
+                if (isExpanded) {{
+                    area.style.display = 'none';
+                }} else {{
+                    area.style.display = 'block';
+                    refreshStats(id);
+                }}
+            }}
+            async function refreshStats(id) {{
+                const successVal = document.getElementById('stat-success-' + id);
+                const failVal = document.getElementById('stat-fail-' + id);
+                const clickVal = document.getElementById('stat-click-' + id);
+                
+                successVal.innerText = "...";
+                failVal.innerText = "...";
+                clickVal.innerText = "...";
+                
+                try {{
+                    const res = await fetch('/api/bildirimler/' + id + '/istatistik');
+                    if (res.ok) {{
+                        const data = await res.json();
+                        successVal.innerText = data.basarili;
+                        failVal.innerText = data.basarisiz;
+                        clickVal.innerText = data.tiklama;
+                    }} else {{
+                        successVal.innerText = "Hata";
+                        failVal.innerText = "Hata";
+                        clickVal.innerText = "Hata";
+                    }}
+                }} catch(err) {{
+                    successVal.innerText = "Hata";
+                    failVal.innerText = "Hata";
+                    clickVal.innerText = "Hata";
+                }}
+            }}
+        </script>
     </body>
     </html>
     """
@@ -554,25 +749,45 @@ def ozel_bildirim_gonder_islem(
         if haber_id and str(haber_id).strip().isdigit():
             h_id = int(str(haber_id).strip())
             
-        # 2. Token (Hedef Cihaz) Listesini Al
+        # 2. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        yeni_bildirim = BildirimDB(
+            baslik=baslik,
+            icerik=icerik.strip() if icerik and icerik.strip() else "Detaylar için tıklayın.",
+            image_url=image_url.strip() if image_url and image_url.strip() else None,
+            hedef_kategori=hedef_kategori,
+            haber_id=h_id,
+            tarih=now_str,
+            basarili_sayisi=0,
+            basarisiz_sayisi=0,
+            tiklama_sayisi=0
+        )
+        db.add(yeni_bildirim)
+        db.commit()
+        db.refresh(yeni_bildirim)
+        # 3. Token (Hedef Cihaz) Listesini Al
         token_listesi = hedef_kitle_tokenlari(hedef_kategori, db)
         
-        # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
+        # 4. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
         if token_listesi:
-            # İhtiyat: İçerik boş bırakılırsa Firebase hata vermesin diye varsayılan atama
-            safe_icerik = icerik.strip() if icerik and icerik.strip() else "Detaylar için tıklayın."
-            safe_image = image_url.strip() if image_url and image_url.strip() else None
+            safe_icerik = yeni_bildirim.icerik
+            safe_image = yeni_bildirim.image_url
             
-            toplu_bildirim_gonder(
+            basarili, basarisiz = toplu_bildirim_gonder(
                 baslik=baslik,
                 icerik=safe_icerik,
                 cihaz_tokenlari=token_listesi,
                 haber_id=h_id,
                 image_url=safe_image,
-                hedef_kategori=hedef_kategori
+                hedef_kategori=hedef_kategori,
+                bildirim_id=yeni_bildirim.id
             )
             
-        return RedirectResponse(url="/admin", status_code=303)
+            yeni_bildirim.basarili_sayisi = basarili
+            yeni_bildirim.basarisiz_sayisi = basarisiz
+            db.commit()
+            
+        return RedirectResponse(url="/admin?tab=bildirimler", status_code=303)
     except Exception as e:
         import traceback
         traceback.print_exc()
