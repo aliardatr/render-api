@@ -236,7 +236,21 @@ def habere_tikla(haber_id: int, db: Session = Depends(get_db)):
     if haber:
         now = datetime.now()
         current_hour_str = now.strftime("%Y-%m-%dT%H")
-        clicks = dict(haber.hourlyClicks) if haber.hourlyClicks else {}
+        # Safely parse hourlyClicks from DB
+        raw_clicks = haber.hourlyClicks
+        if not raw_clicks:
+            clicks = {}
+        elif isinstance(raw_clicks, str):
+            try:
+                clicks = json.loads(raw_clicks)
+            except:
+                clicks = {}
+        else:
+            try:
+                clicks = dict(raw_clicks)
+            except:
+                clicks = {}
+                
         clicks[current_hour_str] = clicks.get(current_hour_str, 0) + 1
         twenty_four_hours_ago = now - timedelta(hours=24)
         cleaned_clicks = {}
