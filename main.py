@@ -181,6 +181,7 @@ app = FastAPI(title="haberPortaliAPI", version="2.5.0", lifespan=lifespan)
 # 4. ANDROID RETROFIT İLETİŞİM KAPILARI (GERÇEK SAYFALAMA)
 # ==========================================
 @app.get("/")
+@app.head("/")
 def ana_sayfa():
     return {"mesaj": "Sunucu ve Gelişmiş Veritabanı Aktif!"}
 @app.get("/kategoriler", response_model=KategoriResponse)
