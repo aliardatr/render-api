@@ -22,15 +22,15 @@ def initialize_firebase():
     else:
         print("⚠️ Uyarı: FIREBASE_CREDENTIALS_JSON environment variable bulunamadı. Bildirim motoru pasif.")
 # Yeni haber eklendiğinde bunu çağıracağız
-def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber_id: int = -1, image_url: str = None, hedef_kategori: str = "Tümü"):
+def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber_id: int = -1, image_url: str = None, hedef_kategori: str = "Tümü", bildirim_id: int = -1):
     try:
         if not firebase_admin._apps:
             print("Firebase pasif olduğu için bildirim atlandı.")
-            return
+            return 0, 0
             
         if not cihaz_tokenlari:
             print("Kayıtlı cihaz token'ı bulunamadı.")
-            return
+            return 0, 0
             
         # Notification nesnesine opsiyonel olarak image URL verilebilir
         notif_obj = messaging.Notification(
@@ -51,6 +51,7 @@ def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber
                     data={
                         "haber_id": str(haber_id),
                         "hedef_kategori": hedef_kategori,
+                        "bildirim_id": str(bildirim_id),
                         "click_action": "FLUTTER_NOTIFICATION_CLICK"
                     },
                     token=token.strip()
@@ -62,8 +63,9 @@ def toplu_bildirim_gonder(baslik: str, icerik: str, cihaz_tokenlari: list, haber
                 failure_count += 1
         
         print(f"📡 Bildirim sonucu: {success_count} başarılı, {failure_count} başarısız.")
+        return success_count, failure_count
     except Exception as e:
         import traceback
         traceback.print_exc()
         print(f"❌ Bildirim gönderme genel hatası: {e}")
-        raise e
+        return 0, len(cihaz_tokenlari)
