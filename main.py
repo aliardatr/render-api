@@ -115,18 +115,35 @@ def kategori_arama_filtresi(kategori_adi: str):
     
     return or_(cond1, cond2, cond3, cond4)
 def hedef_kitle_tokenlari(hedef_kategori: str, db: Session):
-    kullanicilar = db.query(KullaniciDB).filter(KullaniciDB.fcm_token.isnot(None)).all()
-    if hedef_kategori == "Tümü":
-        return [k.fcm_token for k in kullanicilar]
-    
-    hedef_kucuk = turkce_kucult(hedef_kategori)
-    token_list = []
-    for k in kullanicilar:
-        if k.ilgi_alanlari:
-            alanlar_kucuk = [turkce_kucult(a) for a in k.ilgi_alanlari]
-            if hedef_kucuk in alanlar_kucuk:
-                token_list.append(k.fcm_token)
-    return token_list
+    try:
+        kullanicilar = db.query(KullaniciDB).filter(KullaniciDB.fcm_token.isnot(None)).all()
+        # fcm_token'ı boşluk veya boş string olanları temizle
+        kullanicilar = [k for k in kullanicilar if k.fcm_token and k.fcm_token.strip()]
+        
+        if hedef_kategori == "Tümü":
+            return [k.fcm_token for k in kullanicilar]
+        
+        hedef_kucuk = turkce_kucult(hedef_kategori)
+        token_list = []
+        for k in kullanicilar:
+            if k.ilgi_alanlari:
+                alanlar = k.ilgi_alanlari
+                # Eğer ilgi_alanları veritabanında JSON string olarak saklanmışsa güvenle parse edelim
+                if isinstance(alanlar, str):
+                    try:
+                        alanlar = json.loads(alanlar)
+                    except:
+                        alanlar = []
+                
+                if isinstance(alanlar, list):
+                    # Elemanların string olduğundan emin olalım ve küçültelim
+                    alanlar_kucuk = [turkce_kucult(str(a)) for a in alanlar if a]
+                    if hedef_kucuk in alanlar_kucuk:
+                        token_list.append(k.fcm_token)
+        return token_list
+    except Exception as e:
+        print(f"❌ hedef_kitle_tokenlari hesaplanırken hata oluştu: {e}")
+        return []
 # ==========================================
 # 3. FASTAPI YENİ NESİL YAŞAM DÖNGÜSÜ (LIFESPAN)
 # ==========================================
@@ -520,30 +537,35 @@ def ozel_bildirim_gonder_islem(
     hedef_kategori: str = Form("Tümü"), 
     db: Session = Depends(get_db)
 ):
-    # 1. Haber ID güvenli dönüşüm (Boşsa veya harf girilmişse -1 kalır)
-    h_id = -1
-    if haber_id and str(haber_id).strip().isdigit():
-        h_id = int(str(haber_id).strip())
+    try:
+        # 1. Haber ID güvenli dönüşüm (Boşsa veya harf girilmişse -1 kalır)
+        h_id = -1
+        if haber_id and str(haber_id).strip().isdigit():
+            h_id = int(str(haber_id).strip())
+            
+        # 2. Token (Hedef Cihaz) Listesini Al
+        token_listesi = hedef_kitle_tokenlari(hedef_kategori, db)
         
-    # 2. Token (Hedef Cihaz) Listesini Al
-    token_listesi = hedef_kitle_tokenlari(hedef_kategori, db)
-    
-    # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
-    if token_listesi:
-        # İhtiyat: İçerik boş bırakılırsa Firebase hata vermesin diye varsayılan atama
-        safe_icerik = icerik.strip() if icerik and icerik.strip() else "Detaylar için tıklayın."
-        safe_image = image_url.strip() if image_url and image_url.strip() else None
-        
-        toplu_bildirim_gonder(
-            baslik=baslik,
-            icerik=safe_icerik,
-            cihaz_tokenlari=token_listesi,
-            haber_id=h_id,
-            image_url=safe_image,
-            hedef_kategori=hedef_kategori
-        )
-        
-    return RedirectResponse(url="/admin", status_code=303)
+        # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
+        if token_listesi:
+            # İhtiyat: İçerik boş bırakılırsa Firebase hata vermesin diye varsayılan atama
+            safe_icerik = icerik.strip() if icerik and icerik.strip() else "Detaylar için tıklayın."
+            safe_image = image_url.strip() if image_url and image_url.strip() else None
+            
+            toplu_bildirim_gonder(
+                baslik=baslik,
+                icerik=safe_icerik,
+                cihaz_tokenlari=token_listesi,
+                haber_id=h_id,
+                image_url=safe_image,
+                hedef_kategori=hedef_kategori
+            )
+            
+        return RedirectResponse(url="/admin", status_code=303)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"HATA DETAYI: {str(e)}")
 @app.get("/admin/kategoriler", response_class=HTMLResponse)
 def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
     kategoriler = db.query(KategoriDB).all()
