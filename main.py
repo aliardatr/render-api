@@ -978,9 +978,9 @@ def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
                 <label>Haber Başlığı:</label>
                 <input type="text" name="title" required placeholder="Haber manşetini girin...">
                 <label>Kısa Özet (Mobil Ana Akışta Görünecek Metin):</label>
-                <input type="text" name="feedSummary" required placeholder="Akış kartındaki alt bilgi...">
+                <input type="text" name="feedSummary" placeholder="Akış kartındaki alt bilgi... (boş bırakılabilir)">
                 <label>Bildirim Özeti (Telefona Düşecek Push Metni):</label>
-                <input type="text" name="pushSummary" required placeholder="Kullanıcıyı çekecek flaş özet...">
+                <input type="text" name="pushSummary" placeholder="Kullanıcıyı çekecek flaş özet... (boş bırakılabilir)">
                 <label>Ana Kapak Görseli Linki (URL):</label>
                 <input type="url" name="headerImage" required placeholder="https://example.com/resim.jpg">
                 <div class="row">
@@ -1063,7 +1063,7 @@ def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
     return html_content + script_content
 @app.post("/admin/haber-ekle-islem")
 def haber_ekle_islem(
-        title: str = Form(...), feedSummary: str = Form(...), pushSummary: str = Form(...),
+        title: str = Form(...), feedSummary: Optional[str] = Form(None), pushSummary: Optional[str] = Form(None),
         headerImage: str = Form(...), trustScore: int = Form(...), categories: str = Form(...),
         source: str = Form(...), content: str = Form(...), 
         bildirim_gonder: str = Form(None), bildirim_hedef_kategori: str = Form("Tümü"),
@@ -1083,16 +1083,19 @@ def haber_ekle_islem(
             if turkce_kucult(orj_kat) == turkce_kucult(temiz):
                 kategori_listesi.append(orj_kat)
                 break
+    # Boş bırakılan özetler için akıllı geri çekilme (fallback) değerleri üretelim
+    feed_val = feedSummary.strip() if feedSummary and feedSummary.strip() else (content[:150].strip() + "..." if content else "")
+    push_val = pushSummary.strip() if pushSummary and pushSummary.strip() else (feed_val if feed_val else (content[:150].strip() + "..." if content else "Detaylar için tıklayın."))
     yeni_haber = HaberDB(
         title=title, viewCount=0, dailyViewCount=0, hourlyClicks={},
-        pushSummary=pushSummary, feedSummary=feedSummary, content=content,
+        pushSummary=push_val, feedSummary=feed_val, content=content,
         headerImage=headerImage, contentImages=[], trustScore=trustScore,
         categories=kategori_listesi, sources=kaynak_listesi, date=date.today().isoformat()
     )
     db.add(yeni_haber)
     db.commit()
     db.refresh(yeni_haber)
-    if bildirim_gonder == "evet" and pushSummary.strip():
+    if bildirim_gonder == "evet":
         # 1. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -1101,7 +1104,7 @@ def haber_ekle_islem(
         
         yeni_bildirim = BildirimDB(
             baslik=title,
-            icerik=pushSummary.strip() if pushSummary and pushSummary.strip() else "Detaylar için tıklayın.",
+            icerik=push_val,
             image_url=kayit_gorseli,
             hedef_kategori=bildirim_hedef_kategori,
             haber_id=yeni_haber.id,
@@ -1118,7 +1121,7 @@ def haber_ekle_islem(
         
         # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
         if token_listesi:
-            final_genis_metin = bildirim_genis_metin.strip() if bildirim_genis_metin and bildirim_genis_metin.strip() else (pushSummary.strip() if pushSummary else content[:200])
+            final_genis_metin = bildirim_genis_metin.strip() if bildirim_genis_metin and bildirim_genis_metin.strip() else push_val
             
             basarili, basarisiz = toplu_bildirim_gonder(
                 baslik=title,
@@ -1208,9 +1211,9 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
                 <label>Haber Başlığı:</label>
                 <input type="text" name="title" value="{haber.title}" required>
                 <label>Kısa Özet:</label>
-                <input type="text" name="feedSummary" value="{haber.feedSummary}" required>
+                <input type="text" name="feedSummary" value="{haber.feedSummary if haber.feedSummary else ''}" placeholder="boş bırakılabilir">
                 <label>Bildirim Özeti:</label>
-                <input type="text" name="pushSummary" value="{haber.pushSummary}" required>
+                <input type="text" name="pushSummary" value="{haber.pushSummary if haber.pushSummary else ''}" placeholder="boş bırakılabilir">
                 <label>Ana Görsel Linki (URL):</label>
                 <input type="url" name="headerImage" value="{haber.headerImage}" required>
                 <div class="row">
@@ -1298,7 +1301,8 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
     return html_content + script_content
 @app.post("/admin/guncelle/{haber_id}")
 def haber_guncelle(
-        haber_id: str, title: str = Form(...), feedSummary: str = Form(...), pushSummary: str = Form(...),
+        haber_id: str, title: str = Form(...),
+        feedSummary: Optional[str] = Form(None), pushSummary: Optional[str] = Form(None),
         headerImage: str = Form(...), trustScore: int = Form(...), categories: str = Form(...),
         source: str = Form(...), content: str = Form(...), 
         bildirim_gonder: str = Form(None), bildirim_hedef_kategori: str = Form("Tümü"),
@@ -1311,9 +1315,12 @@ def haber_guncelle(
     gercek_id = int(haber_id)
     haber = db.query(HaberDB).filter(HaberDB.id == gercek_id).first()
     if haber:
+        # Boş bırakılan özetler için akıllı geri çekilme (fallback) değerleri üretelim
+        feed_val = feedSummary.strip() if feedSummary and feedSummary.strip() else (content[:150].strip() + "..." if content else "")
+        push_val = pushSummary.strip() if pushSummary and pushSummary.strip() else (feed_val if feed_val else (content[:150].strip() + "..." if content else "Detaylar için tıklayın."))
         haber.title = title
-        haber.feedSummary = feedSummary
-        haber.pushSummary = pushSummary
+        haber.feedSummary = feed_val
+        haber.pushSummary = push_val
         haber.headerImage = headerImage
         haber.trustScore = trustScore
         haber.sources = [source.strip()]
@@ -1330,7 +1337,7 @@ def haber_guncelle(
         haber.content = content.split('\n\n\n\n')[0]
         haber.date = date.today().isoformat()
         db.commit()
-        if bildirim_gonder == "evet" and pushSummary.strip():
+        if bildirim_gonder == "evet":
             # 1. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
@@ -1339,7 +1346,7 @@ def haber_guncelle(
             
             yeni_bildirim = BildirimDB(
                 baslik=title,
-                icerik=pushSummary.strip() if pushSummary and pushSummary.strip() else "Detaylar için tıklayın.",
+                icerik=push_val,
                 image_url=kayit_gorseli,
                 hedef_kategori=bildirim_hedef_kategori,
                 haber_id=haber.id,
@@ -1356,7 +1363,7 @@ def haber_guncelle(
             
             # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
             if token_listesi:
-                final_genis_metin = bildirim_genis_metin.strip() if bildirim_genis_metin and bildirim_genis_metin.strip() else (pushSummary.strip() if pushSummary else content[:200])
+                final_genis_metin = bildirim_genis_metin.strip() if bildirim_genis_metin and bildirim_genis_metin.strip() else push_val
                 
                 basarili, basarisiz = toplu_bildirim_gonder(
                     baslik=title,
