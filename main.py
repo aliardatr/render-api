@@ -731,8 +731,27 @@ def admin_ozel_bildirim_sayfasi(db: Session = Depends(get_db)):
                 <label>Açıklama / İçerik:</label>
                 <input type="text" name="icerik" placeholder="Detaylı bilgi (opsiyonel)">
                 
-                <label>Görsel Linki (Sağdaki Küçük İkon):</label>
-                <input type="url" name="image_url" placeholder="https://... (opsiyonel)">
+                <label>Bildirim Görsel Ayarları (Görseller opsiyoneldir ve boş bırakılabilir):</label>
+                <div class="row">
+                    <div>
+                        <span style="font-size:12px; color:#94A3B8;">Sağdaki Küçük Görsel Linki (URL):</span>
+                        <input type="url" name="kucuk_resim" placeholder="https://... (kapalıyken sağda görünür)">
+                    </div>
+                    <div>
+                        <span style="font-size:12px; color:#94A3B8;">Aşağıdaki Geniş Görsel Linki (URL):</span>
+                        <input type="url" name="buyuk_resim" placeholder="https://... (genişleyince altta görünür)">
+                    </div>
+                </div>
+                
+                <label>Bildirim Genişleme Modu:</label>
+                <select name="genisletme_tipi" id="genisletmeTipi" onchange="toggleGenisletmeAlanlari()">
+                    <option value="resim">Genişleyince Aşağıda Büyük Görsel Göster</option>
+                    <option value="metin">Genişleyince Aşağıda Uzun Metin/Özet Göster</option>
+                </select>
+                <div id="genisMetinAlani" style="display:none; margin-top:10px;">
+                    <label>Genişletilince Gösterilecek Özel Metin:</label>
+                    <textarea name="genis_metin" rows="3" placeholder="Genişletilmiş bildirim içeriği (Boş bırakılırsa normal içerik gösterilir)"></textarea>
+                </div>
                 
                 <label>Bağlı Olduğu Haber ID:</label>
                 <input type="number" name="haber_id" placeholder="Tıklayınca habere gitsin istiyorsanız ID yazın (opsiyonel)">
@@ -748,6 +767,17 @@ def admin_ozel_bildirim_sayfasi(db: Session = Depends(get_db)):
                 </div>
             </form>
         </div>
+        <script>
+            function toggleGenisletmeAlanlari() {{
+                const tipi = document.getElementById('genisletmeTipi').value;
+                const alan = document.getElementById('genisMetinAlani');
+                if (tipi === 'metin') {{
+                    alan.style.display = 'block';
+                }} else {{
+                    alan.style.display = 'none';
+                }}
+            }}
+        </script>
     </body>
     </html>
     """
@@ -756,7 +786,10 @@ def admin_ozel_bildirim_sayfasi(db: Session = Depends(get_db)):
 def ozel_bildirim_gonder_islem(
     baslik: str = Form(...), 
     icerik: Optional[str] = Form(None), 
-    image_url: Optional[str] = Form(None), 
+    kucuk_resim: Optional[str] = Form(None),
+    buyuk_resim: Optional[str] = Form(None),
+    genis_metin: Optional[str] = Form(None),
+    genisletme_tipi: str = Form("resim"),
     haber_id: Optional[str] = Form(None), 
     hedef_kategori: str = Form("Tümü"), 
     db: Session = Depends(get_db)
@@ -769,10 +802,14 @@ def ozel_bildirim_gonder_islem(
             
         # 2. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Log kaydında ana görsel olarak küçük resmi, o yoksa büyük resmi kaydedelim
+        kayit_gorseli = kucuk_resim.strip() if kucuk_resim and kucuk_resim.strip() else (buyuk_resim.strip() if buyuk_resim and buyuk_resim.strip() else None)
+        
         yeni_bildirim = BildirimDB(
             baslik=baslik,
             icerik=icerik.strip() if icerik and icerik.strip() else "Detaylar için tıklayın.",
-            image_url=image_url.strip() if image_url and image_url.strip() else None,
+            image_url=kayit_gorseli,
             hedef_kategori=hedef_kategori,
             haber_id=h_id,
             tarih=now_str,
@@ -798,7 +835,11 @@ def ozel_bildirim_gonder_islem(
                 haber_id=h_id,
                 image_url=safe_image,
                 hedef_kategori=hedef_kategori,
-                bildirim_id=yeni_bildirim.id
+                bildirim_id=yeni_bildirim.id,
+                kucuk_resim=kucuk_resim,
+                buyuk_resim=buyuk_resim,
+                genis_metin=genis_metin,
+                genisletme_tipi=genisletme_tipi
             )
             
             yeni_bildirim.basarili_sayisi = basarili
@@ -964,13 +1005,38 @@ def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
                 <div style="background: #1E222B; padding: 15px; border-radius: 8px; margin-top: 15px; border: 1px dashed #64B5F6;">
                     <label style="margin-top:0; color:#64B5F6;">📢 Bu haber için Bildirim Gönderilsin mi?</label>
                     <div style="display:flex; align-items:center; margin-top:8px;">
-                        <input type="checkbox" name="bildirim_gonder" value="evet" style="width:20px; height:20px; margin:0 10px 0 0;">
+                        <input type="checkbox" name="bildirim_gonder" id="bildirimGonderCheck" value="evet" onchange="toggleHaberBildirimAlanlari()" style="width:20px; height:20px; margin:0 10px 0 0;">
                         <span style="color:#E2E8F0; font-size:14px;">Evet, anında gönder (Uygulamayı uyandırır)</span>
                     </div>
-                    <label style="margin-top:15px;">Hedef Kitle (Kime Gönderilsin?):</label>
-                    <select name="bildirim_hedef_kategori">
-                        {options_html}
-                    </select>
+                    
+                    <div id="haberBildirimAlanlari" style="display:none; margin-top:15px;">
+                        <label>Hedef Kitle (Kime Gönderilsin?):</label>
+                        <select name="bildirim_hedef_kategori">
+                            {options_html}
+                        </select>
+                        
+                        <label>Bildirim Görsel Ayarları (Haber görsellerinden bağımsız, boş bırakılabilir):</label>
+                        <div class="row">
+                            <div>
+                                <span style="font-size:12px; color:#94A3B8;">Sağdaki Küçük Görsel Linki (URL):</span>
+                                <input type="url" name="bildirim_kucuk_resim" placeholder="https://... (boş bırakılırsa kapak resmi kullanılır)">
+                            </div>
+                            <div>
+                                <span style="font-size:12px; color:#94A3B8;">Aşağıdaki Büyük Görsel Linki (URL):</span>
+                                <input type="url" name="bildirim_buyuk_resim" placeholder="https://... (boş bırakılırsa kapak resmi kullanılır)">
+                            </div>
+                        </div>
+                        <label>Bildirim Genişleme Modu:</label>
+                        <select name="bildirim_genisletme_tipi" id="haberBildirimGenisletmeTipi" onchange="toggleHaberBildirimGenisMetin()">
+                            <option value="metin">Genişleyince Haber Özeti / Metin Göster</option>
+                            <option value="resim">Genişleyince Büyük Görsel Göster</option>
+                        </select>
+                        <div id="haberBildirimGenisMetinAlani" style="margin-top:10px;">
+                            <label>Genişletilince Gösterilecek Metin:</label>
+                            <span class="hint">Boş bırakılırsa girilen "Bildirim Özeti" metni veya haber metninin başı otomatik kullanılır.</span>
+                            <textarea name="bildirim_genis_metin" rows="2" placeholder="Örn: Bu flaş gelişmenin tüm çarpıcı detayları haberimizde..."></textarea>
+                        </div>
+                    </div>
                 </div>
                 <div class="row" style="margin-top: 25px;">
                     <a href="/admin" class="btn btn-gray" style="line-height: normal; display: flex; align-items: center; justify-content: center;">İPTAL ET</a>
@@ -978,6 +1044,18 @@ def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
                 </div>
             </form>
         </div>
+        <script>
+            function toggleHaberBildirimAlanlari() {{
+                const isChecked = document.getElementById('bildirimGonderCheck').checked;
+                const alan = document.getElementById('haberBildirimAlanlari');
+                alan.style.display = isChecked ? 'block' : 'none';
+            }}
+            function toggleHaberBildirimGenisMetin() {{
+                const tipi = document.getElementById('haberBildirimGenisletmeTipi').value;
+                const alan = document.getElementById('haberBildirimGenisMetinAlani');
+                alan.style.display = tipi === 'metin' ? 'block' : 'none';
+            }}
+        </script>
     </body>
     </html>
     """
@@ -989,6 +1067,10 @@ def haber_ekle_islem(
         headerImage: str = Form(...), trustScore: int = Form(...), categories: str = Form(...),
         source: str = Form(...), content: str = Form(...), 
         bildirim_gonder: str = Form(None), bildirim_hedef_kategori: str = Form("Tümü"),
+        bildirim_kucuk_resim: Optional[str] = Form(None),
+        bildirim_buyuk_resim: Optional[str] = Form(None),
+        bildirim_genis_metin: Optional[str] = Form(None),
+        bildirim_genisletme_tipi: str = Form("metin"),
         db: Session = Depends(get_db)
 ):
     kaynak_listesi = [source.strip()]
@@ -1013,10 +1095,14 @@ def haber_ekle_islem(
     if bildirim_gonder == "evet" and pushSummary.strip():
         # 1. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Log kaydında ana görsel olarak küçük resmi, o yoksa kapak resmini kaydedelim
+        kayit_gorseli = bildirim_kucuk_resim.strip() if bildirim_kucuk_resim and bildirim_kucuk_resim.strip() else (headerImage.strip() if headerImage else None)
+        
         yeni_bildirim = BildirimDB(
             baslik=title,
             icerik=pushSummary.strip() if pushSummary and pushSummary.strip() else "Detaylar için tıklayın.",
-            image_url=headerImage.strip() if headerImage and headerImage.strip() else None,
+            image_url=kayit_gorseli,
             hedef_kategori=bildirim_hedef_kategori,
             haber_id=yeni_haber.id,
             tarih=now_str,
@@ -1032,14 +1118,20 @@ def haber_ekle_islem(
         
         # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
         if token_listesi:
+            final_genis_metin = bildirim_genis_metin.strip() if bildirim_genis_metin and bildirim_genis_metin.strip() else (pushSummary.strip() if pushSummary else content[:200])
+            
             basarili, basarisiz = toplu_bildirim_gonder(
                 baslik=title,
                 icerik=yeni_bildirim.icerik,
                 cihaz_tokenlari=token_listesi,
                 haber_id=yeni_haber.id,
-                image_url=yeni_bildirim.image_url,
+                image_url=headerImage,
                 hedef_kategori=bildirim_hedef_kategori,
-                bildirim_id=yeni_bildirim.id
+                bildirim_id=yeni_bildirim.id,
+                kucuk_resim=bildirim_kucuk_resim,
+                buyuk_resim=bildirim_buyuk_resim,
+                genis_metin=final_genis_metin,
+                genisletme_tipi=bildirim_genisletme_tipi
             )
             
             yeni_bildirim.basarili_sayisi = basarili
@@ -1142,13 +1234,38 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
                 <div style="background: #1E222B; padding: 15px; border-radius: 8px; margin-top: 15px; border: 1px dashed #64B5F6;">
                     <label style="margin-top:0; color:#64B5F6;">📢 Güncelleme sonrası Bildirim Gönderilsin mi?</label>
                     <div style="display:flex; align-items:center; margin-top:8px;">
-                        <input type="checkbox" name="bildirim_gonder" value="evet" style="width:20px; height:20px; margin:0 10px 0 0;">
+                        <input type="checkbox" name="bildirim_gonder" id="bildirimGonderCheck" value="evet" onchange="toggleHaberBildirimAlanlari()" style="width:20px; height:20px; margin:0 10px 0 0;">
                         <span style="color:#E2E8F0; font-size:14px;">Evet, bildirimi ateşle</span>
                     </div>
-                    <label style="margin-top:15px;">Hedef Kitle (Kime Gönderilsin?):</label>
-                    <select name="bildirim_hedef_kategori">
-                        {options_html}
-                    </select>
+                    
+                    <div id="haberBildirimAlanlari" style="display:none; margin-top:15px;">
+                        <label>Hedef Kitle (Kime Gönderilsin?):</label>
+                        <select name="bildirim_hedef_kategori">
+                            {options_html}
+                        </select>
+                        
+                        <label>Bildirim Görsel Ayarları (Haber görsellerinden bağımsız, boş bırakılabilir):</label>
+                        <div class="row">
+                            <div>
+                                <span style="font-size:12px; color:#94A3B8;">Sağdaki Küçük Görsel Linki (URL):</span>
+                                <input type="url" name="bildirim_kucuk_resim" placeholder="https://... (boş bırakılırsa kapak resmi kullanılır)">
+                            </div>
+                            <div>
+                                <span style="font-size:12px; color:#94A3B8;">Aşağıdaki Büyük Görsel Linki (URL):</span>
+                                <input type="url" name="bildirim_buyuk_resim" placeholder="https://... (boş bırakılırsa kapak resmi kullanılır)">
+                            </div>
+                        </div>
+                        <label>Bildirim Genişleme Modu:</label>
+                        <select name="bildirim_genisletme_tipi" id="haberBildirimGenisletmeTipi" onchange="toggleHaberBildirimGenisMetin()">
+                            <option value="metin">Genişleyince Haber Özeti / Metin Göster</option>
+                            <option value="resim">Genişleyince Büyük Görsel Göster</option>
+                        </select>
+                        <div id="haberBildirimGenisMetinAlani" style="margin-top:10px;">
+                            <label>Genişletilince Gösterilecek Metin:</label>
+                            <span class="hint">Boş bırakılırsa girilen "Bildirim Özeti" metni veya haber metninin başı otomatik kullanılır.</span>
+                            <textarea name="bildirim_genis_metin" rows="2" placeholder="Örn: Bu flaş gelişmenin tüm çarpıcı detayları haberimizde..."></textarea>
+                        </div>
+                    </div>
                 </div>
                 <div class="row" style="margin-top: 25px;">
                     <button type="submit" class="btn btn-blue">💾 DEĞİŞİKLİKLERİ VERİTABANINA KAYDET</button>
@@ -1162,6 +1279,18 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
                 </div>
             </form>
         </div>
+        <script>
+            function toggleHaberBildirimAlanlari() {{
+                const isChecked = document.getElementById('bildirimGonderCheck').checked;
+                const alan = document.getElementById('haberBildirimAlanlari');
+                alan.style.display = isChecked ? 'block' : 'none';
+            }}
+            function toggleHaberBildirimGenisMetin() {{
+                const tipi = document.getElementById('haberBildirimGenisletmeTipi').value;
+                const alan = document.getElementById('haberBildirimGenisMetinAlani');
+                alan.style.display = tipi === 'metin' ? 'block' : 'none';
+            }}
+        </script>
     </body>
     </html>
     """
@@ -1173,6 +1302,10 @@ def haber_guncelle(
         headerImage: str = Form(...), trustScore: int = Form(...), categories: str = Form(...),
         source: str = Form(...), content: str = Form(...), 
         bildirim_gonder: str = Form(None), bildirim_hedef_kategori: str = Form("Tümü"),
+        bildirim_kucuk_resim: Optional[str] = Form(None),
+        bildirim_buyuk_resim: Optional[str] = Form(None),
+        bildirim_genis_metin: Optional[str] = Form(None),
+        bildirim_genisletme_tipi: str = Form("metin"),
         db: Session = Depends(get_db)
 ):
     gercek_id = int(haber_id)
@@ -1200,10 +1333,14 @@ def haber_guncelle(
         if bildirim_gonder == "evet" and pushSummary.strip():
             # 1. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Log kaydında ana görsel olarak küçük resmi, o yoksa kapak resmini kaydedelim
+            kayit_gorseli = bildirim_kucuk_resim.strip() if bildirim_kucuk_resim and bildirim_kucuk_resim.strip() else (headerImage.strip() if headerImage else None)
+            
             yeni_bildirim = BildirimDB(
                 baslik=title,
                 icerik=pushSummary.strip() if pushSummary and pushSummary.strip() else "Detaylar için tıklayın.",
-                image_url=headerImage.strip() if headerImage and headerImage.strip() else None,
+                image_url=kayit_gorseli,
                 hedef_kategori=bildirim_hedef_kategori,
                 haber_id=haber.id,
                 tarih=now_str,
@@ -1219,14 +1356,20 @@ def haber_guncelle(
             
             # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
             if token_listesi:
+                final_genis_metin = bildirim_genis_metin.strip() if bildirim_genis_metin and bildirim_genis_metin.strip() else (pushSummary.strip() if pushSummary else content[:200])
+                
                 basarili, basarisiz = toplu_bildirim_gonder(
                     baslik=title,
                     icerik=yeni_bildirim.icerik,
                     cihaz_tokenlari=token_listesi,
                     haber_id=haber.id,
-                    image_url=yeni_bildirim.image_url,
+                    image_url=headerImage,
                     hedef_kategori=bildirim_hedef_kategori,
-                    bildirim_id=yeni_bildirim.id
+                    bildirim_id=yeni_bildirim.id,
+                    kucuk_resim=bildirim_kucuk_resim,
+                    buyuk_resim=bildirim_buyuk_resim,
+                    genis_metin=final_genis_metin,
+                    genisletme_tipi=bildirim_genisletme_tipi
                 )
                 
                 yeni_bildirim.basarili_sayisi = basarili
