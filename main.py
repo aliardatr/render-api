@@ -85,6 +85,8 @@ def get_db():
         yield db
     finally:
         db.close()
+def turkce_kucult(metin: str):
+    return metin.replace("I", "ı").replace("İ", "i").lower()
 def kategori_arama_filtresi(kategori_adi: str):
     """
     SQLite'da JSON kolonunda Türkçe karakter (ü, ı, ş, ç vb.) ararken 
@@ -93,11 +95,18 @@ def kategori_arama_filtresi(kategori_adi: str):
     raw_kat = kategori_adi
     encoded_kat = json.dumps(kategori_adi)[1:-1]
     
-    cond1 = cast(HaberDB.categories, String).ilike(f'%"{raw_kat}"%')
-    if raw_kat != encoded_kat:
-        cond2 = cast(HaberDB.categories, String).ilike(f'%"{encoded_kat}"%')
-        return or_(cond1, cond2)
-    return cond1
+    # Tırnaksız arama yaparak daha esnek (single/double quote) eşleşme sağlar
+    cond1 = cast(HaberDB.categories, String).ilike(f'%{raw_kat}%')
+    cond2 = cast(HaberDB.categories, String).ilike(f'%{encoded_kat}%')
+    
+    # SQLite LIKE non-ASCII case-sensitivity için manuel varyasyonlar
+    lower_kat = turkce_kucult(raw_kat)
+    upper_kat = raw_kat.replace("ı", "I").replace("i", "İ").upper()
+    
+    cond3 = cast(HaberDB.categories, String).ilike(f'%{lower_kat}%')
+    cond4 = cast(HaberDB.categories, String).ilike(f'%{upper_kat}%')
+    
+    return or_(cond1, cond2, cond3, cond4)
 # ==========================================
 # 3. FASTAPI YENİ NESİL YAŞAM DÖNGÜSÜ (LIFESPAN)
 # ==========================================
@@ -571,7 +580,7 @@ def haber_ekle_islem(
         temiz = k.strip()
         if not temiz: continue
         for orj_kat in kayitli_kategoriler:
-            if orj_kat.lower() == temiz.lower():
+            if turkce_kucult(orj_kat) == turkce_kucult(temiz):
                 kategori_listesi.append(orj_kat)
                 break
     yeni_haber = HaberDB(
@@ -709,7 +718,7 @@ def haber_guncelle(
             temiz = k.strip()
             if not temiz: continue
             for orj_kat in kayitli_kategoriler:
-                if orj_kat.lower() == temiz.lower():
+                if turkce_kucult(orj_kat) == turkce_kucult(temiz):
                     kategori_listesi.append(orj_kat)
                     break
         haber.categories = kategori_listesi
