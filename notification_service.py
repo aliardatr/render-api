@@ -67,7 +67,7 @@ def toplu_bildirim_gonder(
                         "genis_metin": genis_metin.strip() if genis_metin and genis_metin.strip() else "",
                         "genisletme_tipi": genisletme_tipi if genisletme_tipi else "resim"
                     },
-                    token=token.strip()
+                    token=token.strip(),
                     android=messaging.AndroidConfig(priority='high')
                 )
                 messaging.send(message)
