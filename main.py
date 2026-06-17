@@ -14,7 +14,6 @@ from notification_service import initialize_firebase, toplu_bildirim_gonder
 # ==========================================
 # 1. VERİTABANI KURULUMU VE ŞEMALAR
 # ==========================================
-
 db_path = "/tmp/haberler.db" if os.getenv("RENDER") else "./haberler.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
@@ -521,14 +520,15 @@ VALIDATION_SCRIPT = """
 </script>
 """
 
-# 🚀 YENİ EKLENDİ: Kapak Görseli Güncelleme İşlemi (Admin POST)
+# 🚀 YENİ EKLENDİ VE DÜZELTİLDİ: Form zorunluluğu kaldırıldı (Optional + default değer)
 @app.post("/admin/update-cover")
-def update_cover_admin(cover_url: str = Form(...), db: Session = Depends(get_db)):
+def update_cover_admin(cover_url: Optional[str] = Form(""), db: Session = Depends(get_db)):
+    safe_cover_url = cover_url.strip() if cover_url else "" # None veya boş gelirse boş string yap
     ayar = db.query(AyarDB).filter(AyarDB.anahtar == "cover_url").first()
     if ayar:
-        ayar.deger = cover_url
+        ayar.deger = safe_cover_url
     else:
-        db.add(AyarDB(anahtar="cover_url", deger=cover_url))
+        db.add(AyarDB(anahtar="cover_url", deger=safe_cover_url))
     db.commit()
     return RedirectResponse(url="/admin", status_code=303)
 
@@ -666,7 +666,6 @@ def admin_ana_sayfa(
         <option value="24-saatte-en-cok-tiklanan" {"selected" if sort == "24-saatte-en-cok-tiklanan" else ""}>En Çok Okunanlar (Son 24s)</option>
         """
         
-    # 🚀 YENİ EKLENDİ: Mevcut Kapak Değerini Al
     current_cover = db.query(AyarDB).filter(AyarDB.anahtar == "cover_url").first()
     current_cover_val = current_cover.deger if current_cover else ""
 
@@ -696,7 +695,7 @@ def admin_ana_sayfa(
                 <h3 style="margin-top: 0; color: #64B5F6; font-size: 15px; text-transform: uppercase;">🖼️ Uygulama Kapak Görseli</h3>
                 <p style="color: #94A3B8; font-size: 13px; margin-top: -5px; margin-bottom: 12px;">Android uygulamasının açılış ve arka plan görselini anında değiştirin.</p>
                 <form action="/admin/update-cover" method="post" style="display: flex; gap: 12px;">
-                    <input type="url" name="cover_url" value="{current_cover_val}" required placeholder="Resim URL'sini buraya yapıştırın..." style="margin: 0; flex: 1;">
+                    <input type="url" name="cover_url" value="{current_cover_val}" placeholder="Boş bırakırsanız varsayılan arkaplan kullanılır..." style="margin: 0; flex: 1;">
                     <button type="submit" class="btn btn-blue btn-small" style="height: 45px; padding: 0 24px; font-weight: 700;">KAPAĞI GÜNCELLE</button>
                 </form>
             </div>
