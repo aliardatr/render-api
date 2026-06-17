@@ -10,6 +10,7 @@ import json
 from pydantic import BaseModel
 from typing import Optional, List, Any
 from notification_service import initialize_firebase, toplu_bildirim_gonder
+
 # ==========================================
 # 1. VERİTABANI KURULUMU VE ŞEMALAR
 # ==========================================
@@ -23,6 +24,7 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
 class HaberDB(Base):
     __tablename__ = "haberler"
     id = Column(Integer, primary_key=True, index=True)
@@ -39,16 +41,19 @@ class HaberDB(Base):
     categories = Column(JSON)
     sources = Column(JSON)
     date = Column(String)
+
 class KategoriDB(Base):
     __tablename__ = "kategoriler"
     id = Column(Integer, primary_key=True, index=True)
     isim = Column(String, unique=True, index=True)
     aktif_mi = Column(Boolean, default=True)
+
 class KaynakDB(Base):
     __tablename__ = "kaynaklar"
     id = Column(Integer, primary_key=True, index=True)
     isim = Column(String, unique=True)
     logo_url = Column(String, nullable=True)
+
 class KullaniciDB(Base):
     __tablename__ = "kullanicilar"
     id = Column(Integer, primary_key=True, index=True)
@@ -56,6 +61,7 @@ class KullaniciDB(Base):
     kaydedilen_haberler = Column(JSON, default=[])
     ilgi_alanlari = Column(JSON, default=[])
     fcm_token = Column(String, nullable=True)
+
 class BildirimDB(Base):
     __tablename__ = "bildirimler"
     id = Column(Integer, primary_key=True, index=True)
@@ -68,9 +74,18 @@ class BildirimDB(Base):
     basarili_sayisi = Column(Integer, default=0)
     basarisiz_sayisi = Column(Integer, default=0)
     tiklama_sayisi = Column(Integer, default=0)
+
+# 🚀 YENİ EKLENDİ: Uygulama ayarlarını (Kapak Fotoğrafı vb.) kalıcı saklamak için
+class AyarDB(Base):
+    __tablename__ = "ayarlar"
+    id = Column(Integer, primary_key=True, index=True)
+    anahtar = Column(String, unique=True, index=True)
+    deger = Column(String)
+
 Base.metadata.create_all(bind=engine)
+
 # ==========================================
-# 2. PYDANTIC ŞEMALARI (Android Parse Hatalarını Engeller)
+# 2. PYDANTIC ŞEMALARI
 # ==========================================
 class HaberSchema(BaseModel):
     id: int
@@ -88,37 +103,42 @@ class HaberSchema(BaseModel):
     date: Optional[str] = None
     class Config:
         from_attributes = True
+
 class HaberlerResponse(BaseModel):
     vitrin: List[HaberSchema]
     haberler: List[HaberSchema]
+
 class KategoriResponse(BaseModel):
     kategoriler: List[str]
+
 class TokenRequest(BaseModel):
     cihaz_id: str
     fcm_token: str
+
 class IlgiAlanlariRequest(BaseModel):
     ilgi_alanlari: List[str]
+
+# 🚀 YENİ EKLENDİ: Kapak konfigürasyon şeması
+class CoverConfig(BaseModel):
+    active_cover_url: str
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
 def turkce_kucult(metin: str):
     return metin.replace("I", "ı").replace("İ", "i").lower()
+
 def kategori_arama_filtresi(kategori_adi: str):
-    """
-    SQLite'da JSON kolonunda Türkçe karakter (ü, ı, ş, ç vb.) ararken 
-    eski kayıtlardaki unicode (\u00fc vb.) sorunlarını çözer.
-    """
     raw_kat = kategori_adi
     encoded_kat = json.dumps(kategori_adi)[1:-1]
     
-    # Tırnaksız arama yaparak daha esnek (single/double quote) eşleşme sağlar
     cond1 = cast(HaberDB.categories, String).ilike(f'%{raw_kat}%')
     cond2 = cast(HaberDB.categories, String).ilike(f'%{encoded_kat}%')
     
-    # SQLite LIKE non-ASCII case-sensitivity için manuel varyasyonlar
     lower_kat = turkce_kucult(raw_kat)
     upper_kat = raw_kat.replace("ı", "I").replace("i", "İ").upper()
     
@@ -126,10 +146,10 @@ def kategori_arama_filtresi(kategori_adi: str):
     cond4 = cast(HaberDB.categories, String).ilike(f'%{upper_kat}%')
     
     return or_(cond1, cond2, cond3, cond4)
+
 def hedef_kitle_tokenlari(hedef_kategori: str, db: Session):
     try:
         kullanicilar = db.query(KullaniciDB).filter(KullaniciDB.fcm_token.isnot(None)).all()
-        # fcm_token'ı boşluk veya boş string olanları temizle
         kullanicilar = [k for k in kullanicilar if k.fcm_token and k.fcm_token.strip()]
         
         if hedef_kategori == "Tümü":
@@ -140,7 +160,6 @@ def hedef_kitle_tokenlari(hedef_kategori: str, db: Session):
         for k in kullanicilar:
             if k.ilgi_alanlari:
                 alanlar = k.ilgi_alanlari
-                # Eğer ilgi_alanları veritabanında JSON string olarak saklanmışsa güvenle parse edelim
                 if isinstance(alanlar, str):
                     try:
                         alanlar = json.loads(alanlar)
@@ -148,7 +167,6 @@ def hedef_kitle_tokenlari(hedef_kategori: str, db: Session):
                         alanlar = []
                 
                 if isinstance(alanlar, list):
-                    # Elemanların string olduğundan emin olalım ve küçültelim
                     alanlar_kucuk = [turkce_kucult(str(a)) for a in alanlar if a]
                     if hedef_kucuk in alanlar_kucuk:
                         token_list.append(k.fcm_token)
@@ -156,15 +174,16 @@ def hedef_kitle_tokenlari(hedef_kategori: str, db: Session):
     except Exception as e:
         print(f"❌ hedef_kitle_tokenlari hesaplanırken hata oluştu: {e}")
         return []
+
 # ==========================================
-# 3. FASTAPI YENİ NESİL YAŞAM DÖNGÜSÜ (LIFESPAN)
+# 3. FASTAPI YENİ NESİL YAŞAM DÖNGÜSÜ
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     initialize_firebase()
     db = SessionLocal()
     try:
-        # 1. EKSİK SÜTUN MİGRASYONU (fcm_token sütununu PostgreSQL/SQLite veritabanına dinamik ekler)
+        # Sütun Migrasyonu
         try:
             from sqlalchemy import text
             db.execute(text("ALTER TABLE kullanicilar ADD COLUMN fcm_token VARCHAR;"))
@@ -172,12 +191,13 @@ async def lifespan(app: FastAPI):
             print("🚀 'fcm_token' sütunu 'kullanicilar' tablosuna başarıyla eklendi!")
         except Exception as alter_err:
             db.rollback()
-            # Sütun zaten varsa hata vermesi normaldir. Logları kirletmemek ve Render'da kırmızı uyarı almamak için detayı gizliyoruz.
             err_str = str(alter_err).lower()
             if "already exists" in err_str or "duplicate column" in err_str:
                 print("ℹ️ fcm_token sütun kontrolü: Sütun zaten mevcut (Sistem hazır).")
             else:
                 print(f"ℹ️ fcm_token sütun kontrolü uyarısı: {err_str[:150]}")
+                
+        # Varsayılan Kategoriler
         if db.query(KategoriDB).count() == 0:
             varsayilanlar = [
                 "Teknoloji", "Bilim", "Gündem", "Finans", "Tarih", "Siyaset",
@@ -188,30 +208,47 @@ async def lifespan(app: FastAPI):
                 yeni_kat = KategoriDB(isim=kat_isim)
                 db.add(yeni_kat)
             db.commit()
+            
+        # 🚀 YENİ EKLENDİ: Varsayılan Kapak Ayarı
+        if db.query(AyarDB).filter(AyarDB.anahtar == "cover_url").count() == 0:
+            varsayilan_kapak = AyarDB(anahtar="cover_url", deger="")
+            db.add(varsayilan_kapak)
+            db.commit()
+
     finally:
         db.close()
     yield
     print("🛑 Sunucu kapatılıyor...")
+
 app = FastAPI(title="haberPortaliAPI", version="2.5.0", lifespan=lifespan)
+
 # ==========================================
-# 4. ANDROID RETROFIT İLETİŞİM KAPILARI (GERÇEK SAYFALAMA)
+# 4. ANDROID RETROFIT İLETİŞİM KAPILARI 
 # ==========================================
 @app.get("/")
 @app.head("/")
 def ana_sayfa():
     return {"mesaj": "Sunucu ve Gelişmiş Veritabanı Aktif!"}
+
+# 🚀 YENİ EKLENDİ: Uygulamanın her açılışta çekeceği kapak konfigürasyonu
+@app.get("/api/cover", response_model=CoverConfig)
+def get_cover_config(db: Session = Depends(get_db)):
+    ayar = db.query(AyarDB).filter(AyarDB.anahtar == "cover_url").first()
+    return {"active_cover_url": ayar.deger if ayar and ayar.deger else ""}
+
 @app.get("/kategoriler", response_model=KategoriResponse)
 def kategorileri_getir(db: Session = Depends(get_db)):
     kategoriler = db.query(KategoriDB).filter(KategoriDB.aktif_mi == True).all()
     kategori_isimleri = [k.isim for k in kategoriler]
     return {"kategoriler": kategori_isimleri}
-# DİKKAT (HATA 2 DÜZELTİLDİ): /detay/ route'u, genel kategori route'undan önce gelmeli
+
 @app.get("/haberler/detay/{haber_id}", response_model=HaberSchema)
 def haber_detayi_getir(haber_id: int, db: Session = Depends(get_db)):
     haber = db.query(HaberDB).filter(HaberDB.id == haber_id).first()
     if haber:
         return haber
     raise HTTPException(status_code=404, detail="Haber bulunamadı")
+
 @app.get("/haberler/filtrele", response_model=HaberlerResponse)
 def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0), limit: int = Query(6, ge=1), db: Session = Depends(get_db)):
     if not kategoriler:
@@ -220,7 +257,6 @@ def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0
         return {"vitrin": vitrin, "haberler": haberler}
     istenen_kategoriler = [k.strip() for k in kategoriler.split(",")]
     
-    # HATA 6 (ÇÖKME) DÜZELTİLDİ: JSON sütunu filtrelerken Türkçe karakter desteği eklendi
     conditions = [kategori_arama_filtresi(kat) for kat in istenen_kategoriler]
     
     haberler = db.query(HaberDB).filter(or_(*conditions)).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
@@ -230,13 +266,13 @@ def coklu_kategori_getir(kategoriler: str = Query(""), skip: int = Query(0, ge=0
         vitrin = db.query(HaberDB).filter(or_(*conditions)).order_by(HaberDB.dailyViewCount.desc()).limit(10).all()
         
     return {"vitrin": vitrin, "haberler": haberler}
+
 @app.post("/haberler/{haber_id}/tikla")
 def habere_tikla(haber_id: int, db: Session = Depends(get_db)):
     haber = db.query(HaberDB).filter(HaberDB.id == haber_id).first()
     if haber:
         now = datetime.now()
         current_hour_str = now.strftime("%Y-%m-%dT%H")
-        # Safely parse hourlyClicks from DB
         raw_clicks = haber.hourlyClicks
         if not raw_clicks:
             clicks = {}
@@ -267,6 +303,7 @@ def habere_tikla(haber_id: int, db: Session = Depends(get_db)):
         db.commit()
         return {"mesaj": "Tıklanma artırıldı", "toplam": haber.viewCount, "son_24_saat": haber.dailyViewCount}
     raise HTTPException(status_code=404, detail="Haber bulunamadı")
+
 @app.get("/haberler/{kategori_adi}", response_model=HaberlerResponse)
 def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), limit: int = Query(6, ge=1), db: Session = Depends(get_db)):
     if kategori_adi.lower() == "tümü":
@@ -274,7 +311,6 @@ def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), l
         vitrin = db.query(HaberDB).order_by(HaberDB.dailyViewCount.desc()).limit(10).all() if skip == 0 else []
         return {"vitrin": vitrin, "haberler": haberler}
         
-    # HATA 6 (ÇÖKME) DÜZELTİLDİ: JSON formatındaki sütun doğrudan ilike aranamaz, Türkçe destekli filtremiz kullanıldı.
     filtre = kategori_arama_filtresi(kategori_adi)
     haberler = db.query(HaberDB).filter(filtre).order_by(HaberDB.id.desc()).offset(skip).limit(limit).all()
     
@@ -283,6 +319,7 @@ def kategoriye_gore_haber_getir(kategori_adi: str, skip: int = Query(0, ge=0), l
         vitrin = db.query(HaberDB).filter(filtre).order_by(HaberDB.dailyViewCount.desc()).limit(10).all()
         
     return {"vitrin": vitrin, "haberler": haberler}
+
 @app.post("/kullanicilar/token-kaydet")
 def token_kaydet(request: TokenRequest, db: Session = Depends(get_db)):
     kullanici = db.query(KullaniciDB).filter(KullaniciDB.cihaz_id == request.cihaz_id).first()
@@ -298,6 +335,7 @@ def token_kaydet(request: TokenRequest, db: Session = Depends(get_db)):
         db.add(yeni_kullanici)
     db.commit()
     return {"mesaj": "FCM Token başarıyla kaydedildi."}
+
 @app.post("/kullanicilar/{cihaz_id}/ilgi-alanlari-kaydet")
 def ilgi_alanlari_kaydet(cihaz_id: str, request: IlgiAlanlariRequest, db: Session = Depends(get_db)):
     kullanici = db.query(KullaniciDB).filter(KullaniciDB.cihaz_id == cihaz_id).first()
@@ -306,7 +344,6 @@ def ilgi_alanlari_kaydet(cihaz_id: str, request: IlgiAlanlariRequest, db: Sessio
         db.commit()
         return {"mesaj": "İlgi alanları başarıyla güncellendi."}
     
-    # Kullanıcı yoksa oluşturup kaydedelim
     yeni_kullanici = KullaniciDB(
         cihaz_id=cihaz_id,
         fcm_token=None,
@@ -316,6 +353,7 @@ def ilgi_alanlari_kaydet(cihaz_id: str, request: IlgiAlanlariRequest, db: Sessio
     db.add(yeni_kullanici)
     db.commit()
     return {"mesaj": "Kullanıcı oluşturuldu ve ilgi alanları eklendi."}
+
 @app.post("/bildirimler/{bildirim_id}/tikla")
 def bildirim_tikla(bildirim_id: int, db: Session = Depends(get_db)):
     bildirim = db.query(BildirimDB).filter(BildirimDB.id == bildirim_id).first()
@@ -324,6 +362,7 @@ def bildirim_tikla(bildirim_id: int, db: Session = Depends(get_db)):
         db.commit()
         return {"mesaj": "Bildirim tıklaması artırıldı", "tiklama_sayisi": bildirim.tiklama_sayisi}
     raise HTTPException(status_code=404, detail="Bildirim bulunamadı")
+
 @app.get("/api/bildirimler/{bildirim_id}/istatistik")
 def api_bildirim_istatistik(bildirim_id: int, db: Session = Depends(get_db)):
     b = db.query(BildirimDB).filter(BildirimDB.id == bildirim_id).first()
@@ -334,8 +373,9 @@ def api_bildirim_istatistik(bildirim_id: int, db: Session = Depends(get_db)):
             "tiklama": b.tiklama_sayisi
         }
     raise HTTPException(status_code=404, detail="Bildirim bulunamadı")
+
 # ==========================================
-# 5. GELİŞMİŞ WEB ADMİN PANELİ (PREMIUM UI DESIGN)
+# 5. GELİŞMİŞ WEB ADMİN PANELİ 
 # ==========================================
 ADMIN_CSS = """
 <style>
@@ -479,6 +519,18 @@ VALIDATION_SCRIPT = """
     checkCategories();
 </script>
 """
+
+# 🚀 YENİ EKLENDİ: Kapak Görseli Güncelleme İşlemi (Admin POST)
+@app.post("/admin/update-cover")
+def update_cover_admin(cover_url: str = Form(...), db: Session = Depends(get_db)):
+    ayar = db.query(AyarDB).filter(AyarDB.anahtar == "cover_url").first()
+    if ayar:
+        ayar.deger = cover_url
+    else:
+        db.add(AyarDB(anahtar="cover_url", deger=cover_url))
+    db.commit()
+    return RedirectResponse(url="/admin", status_code=303)
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_ana_sayfa(
     tab: str = "haberler", 
@@ -488,7 +540,7 @@ def admin_ana_sayfa(
 ):
     tab = tab.lower()
     
-    # 1. KATEGORİ SEÇENEKLERİNİ HAZIRLA (Filtreleme için)
+    # 1. KATEGORİ SEÇENEKLERİNİ HAZIRLA
     kayitli_kategoriler = [k.isim for k in db.query(KategoriDB).all()]
     
     kat_options_html = f'<option value="Tümü" {"selected" if kategori == "Tümü" else ""}>Kategori: Tümü</option>'
@@ -498,7 +550,6 @@ def admin_ana_sayfa(
     liste_html = ""
     
     if tab == "bildirimler":
-        # 2. BİLDİRİMLER SEKME YÜKLEMESİ
         query = db.query(BildirimDB)
         if kategori != "Tümü":
             query = query.filter(BildirimDB.hedef_kategori == kategori)
@@ -553,7 +604,6 @@ def admin_ana_sayfa(
             </div>
             """
     else:
-        # 3. HABERLER SEKME YÜKLEMESİ (ESKİ YAPI - KORUNDU)
         if sort == "yeniden-eskiye":
             haberler = db.query(HaberDB).order_by(HaberDB.id.desc()).limit(200).all()
         elif sort == "eskiden-yeniye":
@@ -586,7 +636,7 @@ def admin_ana_sayfa(
                 </div>
             </a>
             """
-    # Pre-resolve f-string variables to avoid syntax/nesting issues
+            
     tab_title = "📰 Yayındaki İçerik Akışı" if tab == "haberler" else "📢 Gönderilen Bildirim Günlüğü"
     
     tab_haberler_border = '#1976D2' if tab == 'haberler' else 'transparent'
@@ -615,6 +665,10 @@ def admin_ana_sayfa(
         <option value="24-saatte-en-cok-tiklanan" {"selected" if sort == "24-saatte-en-cok-tiklanan" else ""}>En Çok Okunanlar (Son 24s)</option>
         """
         
+    # 🚀 YENİ EKLENDİ: Mevcut Kapak Değerini Al
+    current_cover = db.query(AyarDB).filter(AyarDB.anahtar == "cover_url").first()
+    current_cover_val = current_cover.deger if current_cover else ""
+
     empty_list_msg = f"<p style='color: #64748B; text-align:center; padding: 20px;'>Henüz {'haber' if tab == 'haberler' else 'bildirim'} kaydı bulunmuyor.</p>"
     news_list_content = liste_html if liste_html else empty_list_msg
     html_content = f"""
@@ -636,7 +690,16 @@ def admin_ana_sayfa(
             <div class="row" style="margin-top: 12px;">
                 <a href="/admin/ozel-bildirim" class="btn btn-blue" style="background:#8B5CF6;">📢 ÖZEL BİLDİRİM GÖNDER</a>
             </div>
-            <!-- Sleek Tab Switcher -->
+            
+            <div style="background: #1E222B; padding: 20px; border-radius: 12px; border: 1px solid #2D323F; margin-top: 20px; margin-bottom: 20px;">
+                <h3 style="margin-top: 0; color: #64B5F6; font-size: 15px; text-transform: uppercase;">🖼️ Uygulama Kapak Görseli</h3>
+                <p style="color: #94A3B8; font-size: 13px; margin-top: -5px; margin-bottom: 12px;">Android uygulamasının açılış ve arka plan görselini anında değiştirin.</p>
+                <form action="/admin/update-cover" method="post" style="display: flex; gap: 12px;">
+                    <input type="url" name="cover_url" value="{current_cover_val}" required placeholder="Resim URL'sini buraya yapıştırın..." style="margin: 0; flex: 1;">
+                    <button type="submit" class="btn btn-blue btn-small" style="height: 45px; padding: 0 24px; font-weight: 700;">KAPAĞI GÜNCELLE</button>
+                </form>
+            </div>
+
             <div style="display: flex; gap: 10px; margin-top: 35px; border-bottom: 2px solid #22252E; padding-bottom: 0;">
                 <a href="/admin?tab=haberler" style="padding: 12px 24px; text-decoration: none; font-weight: bold; border-bottom: 3px solid {tab_haberler_border}; color: {tab_haberler_color}; font-size: 15px; transition: all 0.2s;">📰 Haber Akışı</a>
                 <a href="/admin?tab=bildirimler" style="padding: 12px 24px; text-decoration: none; font-weight: bold; border-bottom: 3px solid {tab_bildirimler_border}; color: {tab_bildirimler_color}; font-size: 15px; transition: all 0.2s;">📢 Gönderilen Bildirimler</a>
@@ -706,6 +769,7 @@ def admin_ana_sayfa(
     </html>
     """
     return html_content
+
 @app.get("/admin/ozel-bildirim", response_class=HTMLResponse)
 def admin_ozel_bildirim_sayfasi(db: Session = Depends(get_db)):
     kayitli_kategoriler = [k.isim for k in db.query(KategoriDB).all()]
@@ -782,6 +846,7 @@ def admin_ozel_bildirim_sayfasi(db: Session = Depends(get_db)):
     </html>
     """
     return html_content
+
 @app.post("/admin/ozel-bildirim-gonder")
 def ozel_bildirim_gonder_islem(
     baslik: str = Form(...), 
@@ -795,15 +860,12 @@ def ozel_bildirim_gonder_islem(
     db: Session = Depends(get_db)
 ):
     try:
-        # 1. Haber ID güvenli dönüşüm (Boşsa veya harf girilmişse -1 kalır)
         h_id = -1
         if haber_id and str(haber_id).strip().isdigit():
             h_id = int(str(haber_id).strip())
             
-        # 2. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Log kaydında ana görsel olarak küçük resmi, o yoksa büyük resmi kaydedelim
         kayit_gorseli = kucuk_resim.strip() if kucuk_resim and kucuk_resim.strip() else (buyuk_resim.strip() if buyuk_resim and buyuk_resim.strip() else None)
         
         yeni_bildirim = BildirimDB(
@@ -820,10 +882,8 @@ def ozel_bildirim_gonder_islem(
         db.add(yeni_bildirim)
         db.commit()
         db.refresh(yeni_bildirim)
-        # 3. Token (Hedef Cihaz) Listesini Al
         token_listesi = hedef_kitle_tokenlari(hedef_kategori, db)
         
-        # 4. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
         if token_listesi:
             safe_icerik = yeni_bildirim.icerik
             safe_image = yeni_bildirim.image_url
@@ -851,6 +911,7 @@ def ozel_bildirim_gonder_islem(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"HATA DETAYI: {str(e)}")
+
 @app.get("/admin/kategoriler", response_class=HTMLResponse)
 def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
     kategoriler = db.query(KategoriDB).all()
@@ -895,11 +956,9 @@ def admin_kategoriler_sayfasi(db: Session = Depends(get_db)):
     </html>
     """
     return html_content
+
 @app.get("/admin/kategoriler/{kategori_adi}", response_class=HTMLResponse)
 def admin_kategori_haberleri_sayfasi(kategori_adi: str, db: Session = Depends(get_db)):
-    # HATA DÜZELTME: Kategori sayfasında tüm verileri çekmek RAM israfıdır. 
-    # ilike SQLite JSON kolonlarında patladığı için cast(HaberDB.categories, String) kullanılır.
-    # SQLite JSON kolonlarında Türkçe karakter araması (ü, ı vb.) için filtre kullanıldı.
     filtre = kategori_arama_filtresi(kategori_adi)
     filtrelenmis_haberler = db.query(HaberDB).filter(filtre).order_by(HaberDB.id.desc()).limit(100).all()
     liste_html = ""
@@ -937,6 +996,7 @@ def admin_kategori_haberleri_sayfasi(kategori_adi: str, db: Session = Depends(ge
     </html>
     """
     return html_content
+
 @app.post("/admin/kategori-ekle")
 def admin_kategori_ekle(isim: str = Form(...), db: Session = Depends(get_db)):
     temiz_isim = isim.strip()
@@ -947,6 +1007,7 @@ def admin_kategori_ekle(isim: str = Form(...), db: Session = Depends(get_db)):
         db.add(yeni_kat)
         db.commit()
     return RedirectResponse(url="/admin/kategoriler", status_code=303)
+
 @app.post("/admin/kategori-sil/{kat_id}")
 def admin_kategori_sil(kat_id: int, db: Session = Depends(get_db)):
     kategori = db.query(KategoriDB).filter(KategoriDB.id == kat_id).first()
@@ -954,6 +1015,7 @@ def admin_kategori_sil(kat_id: int, db: Session = Depends(get_db)):
         db.delete(kategori)
         db.commit()
     return RedirectResponse(url="/admin/kategoriler", status_code=303)
+
 # ==========================================
 # 6. HABER EKLEME VE DÜZENLEME MODÜLLERİ
 # ==========================================
@@ -1061,6 +1123,7 @@ def admin_haber_ekleme_sayfasi(db: Session = Depends(get_db)):
     """
     script_content = VALIDATION_SCRIPT.replace("DATABASE_CATEGORIES_PLACEHOLDER", json.dumps(kayitli_kategoriler))
     return html_content + script_content
+
 @app.post("/admin/haber-ekle-islem")
 def haber_ekle_islem(
         title: str = Form(...), feedSummary: Optional[str] = Form(None), pushSummary: Optional[str] = Form(None),
@@ -1083,7 +1146,6 @@ def haber_ekle_islem(
             if turkce_kucult(orj_kat) == turkce_kucult(temiz):
                 kategori_listesi.append(orj_kat)
                 break
-    # Boş bırakılan özetler için akıllı geri çekilme (fallback) değerleri üretelim
     feed_val = feedSummary.strip() if feedSummary and feedSummary.strip() else (content[:150].strip() + "..." if content else "")
     push_val = pushSummary.strip() if pushSummary and pushSummary.strip() else (feed_val if feed_val else (content[:150].strip() + "..." if content else "Detaylar için tıklayın."))
     yeni_haber = HaberDB(
@@ -1096,12 +1158,8 @@ def haber_ekle_islem(
     db.commit()
     db.refresh(yeni_haber)
     if bildirim_gonder == "evet":
-        # 1. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Log kaydında ana görsel olarak küçük resmi, o yoksa kapak resmini kaydedelim
         kayit_gorseli = bildirim_kucuk_resim.strip() if bildirim_kucuk_resim and bildirim_kucuk_resim.strip() else (headerImage.strip() if headerImage else None)
-        
         yeni_bildirim = BildirimDB(
             baslik=title,
             icerik=push_val,
@@ -1116,10 +1174,8 @@ def haber_ekle_islem(
         db.add(yeni_bildirim)
         db.commit()
         db.refresh(yeni_bildirim)
-        # 2. Token (Hedef Cihaz) Listesini Al
         token_listesi = hedef_kitle_tokenlari(bildirim_hedef_kategori, db)
         
-        # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
         if token_listesi:
             final_genis_metin = bildirim_genis_metin.strip() if bildirim_genis_metin and bildirim_genis_metin.strip() else push_val
             
@@ -1143,6 +1199,7 @@ def haber_ekle_islem(
             
         return RedirectResponse(url="/admin?tab=bildirimler", status_code=303)
     return RedirectResponse(url="/admin", status_code=303)
+
 @app.get("/admin/haber-duzenle-secim", response_class=HTMLResponse)
 def admin_duzenle_secim():
     html_content = f"""
@@ -1177,6 +1234,7 @@ def admin_duzenle_secim():
     </html>
     """
     return html_content
+
 @app.get("/admin/{haber_id}", response_class=HTMLResponse)
 def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
     try:
@@ -1299,6 +1357,7 @@ def admin_haber_duzenle_sayfasi(haber_id: str, db: Session = Depends(get_db)):
     """
     script_content = VALIDATION_SCRIPT.replace("DATABASE_CATEGORIES_PLACEHOLDER", json.dumps(kayitli_kategoriler))
     return html_content + script_content
+
 @app.post("/admin/guncelle/{haber_id}")
 def haber_guncelle(
         haber_id: str, title: str = Form(...),
@@ -1315,7 +1374,6 @@ def haber_guncelle(
     gercek_id = int(haber_id)
     haber = db.query(HaberDB).filter(HaberDB.id == gercek_id).first()
     if haber:
-        # Boş bırakılan özetler için akıllı geri çekilme (fallback) değerleri üretelim
         feed_val = feedSummary.strip() if feedSummary and feedSummary.strip() else (content[:150].strip() + "..." if content else "")
         push_val = pushSummary.strip() if pushSummary and pushSummary.strip() else (feed_val if feed_val else (content[:150].strip() + "..." if content else "Detaylar için tıklayın."))
         haber.title = title
@@ -1338,10 +1396,8 @@ def haber_guncelle(
         haber.date = date.today().isoformat()
         db.commit()
         if bildirim_gonder == "evet":
-            # 1. Önce Bildirim Kaydını Veritabanına Oluşturuyoruz
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # Log kaydında ana görsel olarak küçük resmi, o yoksa kapak resmini kaydedelim
             kayit_gorseli = bildirim_kucuk_resim.strip() if bildirim_kucuk_resim and bildirim_kucuk_resim.strip() else (headerImage.strip() if headerImage else None)
             
             yeni_bildirim = BildirimDB(
@@ -1358,10 +1414,8 @@ def haber_guncelle(
             db.add(yeni_bildirim)
             db.commit()
             db.refresh(yeni_bildirim)
-            # 2. Token (Hedef Cihaz) Listesini Al
             token_listesi = hedef_kitle_tokenlari(bildirim_hedef_kategori, db)
             
-            # 3. Eğer sistemde en az 1 cihaz kayıtlıysa bildirimi ateşle
             if token_listesi:
                 final_genis_metin = bildirim_genis_metin.strip() if bildirim_genis_metin and bildirim_genis_metin.strip() else push_val
                 
@@ -1385,6 +1439,7 @@ def haber_guncelle(
                 
             return RedirectResponse(url="/admin?tab=bildirimler", status_code=303)
     return RedirectResponse(url="/admin", status_code=303)
+
 @app.post("/admin/sil/{haber_id}")
 def haber_sil(haber_id: str, db: Session = Depends(get_db)):
     gercek_id = int(haber_id)
@@ -1393,5 +1448,6 @@ def haber_sil(haber_id: str, db: Session = Depends(get_db)):
         db.delete(haber)
         db.commit()
     return RedirectResponse(url="/admin", status_code=303)
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
