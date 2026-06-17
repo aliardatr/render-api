@@ -14,7 +14,6 @@ from notification_service import initialize_firebase, toplu_bildirim_gonder
 # ==========================================
 # 1. VERİTABANI KURULUMU VE ŞEMALAR
 # ==========================================
-
 db_path = "/tmp/haberler.db" if os.getenv("RENDER") else "./haberler.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
