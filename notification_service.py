@@ -68,6 +68,7 @@ def toplu_bildirim_gonder(
                         "genisletme_tipi": genisletme_tipi if genisletme_tipi else "resim"
                     },
                     token=token.strip()
+                    android=messaging.AndroidConfig(priority='high')
                 )
                 messaging.send(message)
                 success_count += 1
